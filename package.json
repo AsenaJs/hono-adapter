@@ -3,6 +3,13 @@
   "module": "index.ts",
   "description": "Hono server and websocket adapter for Asenajs ",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "version": "1.0.0",
   "author": "LibirSoft",
   "license": "MIT",
@@ -11,7 +18,8 @@
     "test:watch": "bun test --watch",
     "test:coverage": "bun test --coverage",
     "build": "bun run clean && tsc",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "bun run build"
   },
   "devDependencies": {
     "@asenajs/asena": "link:@asenajs/asena",
