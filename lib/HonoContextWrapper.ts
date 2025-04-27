@@ -1,22 +1,11 @@
-import type { Context, HonoRequest } from "hono";
-import type {
-  AsenaContext,
-  CookieExtra,
-  SendOptions,
-} from "@asenajs/asena/adapter";
-import {
-  deleteCookie,
-  getCookie,
-  getSignedCookie,
-  setCookie,
-  setSignedCookie,
-} from "hono/cookie"; // add delete cookie
-import type { CookieOptions } from "hono/utils/cookie";
-import type { ContentfulStatusCode } from "hono/utils/http-status";
+import type { Context, HonoRequest } from 'hono';
+import type { AsenaContext, CookieExtra, SendOptions } from '@asenajs/asena/adapter';
+import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } from 'hono/cookie'; // add delete cookie
+import type { CookieOptions } from 'hono/utils/cookie';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
-export class HonoContextWrapper
-  implements AsenaContext<HonoRequest<any, any>, Response>
-{
+export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, Response> {
+
   private _context: Context;
 
   public constructor(context: Context) {
@@ -69,9 +58,7 @@ export class HonoContextWrapper
 
   public send(data: string | any, statusOrOptions?: SendOptions | number) {
     const { headers = {}, status = 200 } =
-      typeof statusOrOptions === "number"
-        ? { status: statusOrOptions }
-        : statusOrOptions || {};
+      typeof statusOrOptions === 'number' ? { status: statusOrOptions } : statusOrOptions || {};
 
     if (headers !== undefined) {
       Object.entries(headers).forEach(([key, value]) => {
@@ -79,27 +66,18 @@ export class HonoContextWrapper
       });
     }
 
-    if (typeof data === "string") {
+    if (typeof data === 'string') {
       return this._context.text(data);
     }
 
     return this._context.json(data, status as ContentfulStatusCode, headers);
   }
 
-  public async getCookie(
-    name: string,
-    secret?: string | BufferSource,
-  ): Promise<string | false> {
-    return secret
-      ? await getSignedCookie(this._context, secret, name)
-      : getCookie(this._context, name);
+  public async getCookie(name: string, secret?: string | BufferSource): Promise<string | false> {
+    return secret ? await getSignedCookie(this._context, secret, name) : getCookie(this._context, name);
   }
 
-  public async setCookie(
-    name: string,
-    value: string,
-    options?: CookieExtra<CookieOptions>,
-  ) {
+  public async setCookie(name: string, value: string, options?: CookieExtra<CookieOptions>) {
     const { secret, extraOptions } = options ?? {
       secret: undefined,
       extraOptions: undefined,
@@ -110,10 +88,7 @@ export class HonoContextWrapper
       : setCookie(this._context, name, value, extraOptions);
   }
 
-  public async deleteCookie(
-    name: string,
-    options?: CookieExtra<CookieOptions>,
-  ) {
+  public async deleteCookie(name: string, options?: CookieExtra<CookieOptions>) {
     const { extraOptions } = options ?? {
       secret: undefined,
       extraOptions: undefined,
@@ -135,20 +110,18 @@ export class HonoContextWrapper
   }
 
   public setWebSocketValue(value: any): void {
-    this._context.set("_websocketData", value);
+    this._context.set('_websocketData', value);
   }
 
   public getWebSocketValue<T>(): T {
-    return this._context.get("_websocketData") as T;
+    return this._context.get('_websocketData') as T;
   }
 
   public html(data: string, statusOrOptions?: SendOptions | number) {
     const { headers = {}, status = 200 } =
-      typeof statusOrOptions === "number"
-        ? { status: statusOrOptions }
-        : statusOrOptions || {};
+      typeof statusOrOptions === 'number' ? { status: statusOrOptions } : statusOrOptions || {};
 
-    if (typeof data === "string") {
+    if (typeof data === 'string') {
       return this._context.html(data, status as ContentfulStatusCode, headers);
     }
 
@@ -166,4 +139,5 @@ export class HonoContextWrapper
   public set context(value: Context) {
     this._context = value;
   }
+
 }

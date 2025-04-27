@@ -1,14 +1,8 @@
-import {
-  type Context,
-  type Handler,
-  Hono,
-  type MiddlewareHandler,
-  type ValidationTargets,
-} from "hono";
-import type { Server } from "bun";
-import * as bun from "bun";
-import { HonoContextWrapper } from "./HonoContextWrapper";
-import type { AsenaWebsocketAdapter } from "@asenajs/asena/adapter";
+import { type Context, type Handler, Hono, type MiddlewareHandler, type ValidationTargets } from 'hono';
+import type { Server } from 'bun';
+import * as bun from 'bun';
+import { HonoContextWrapper } from './HonoContextWrapper';
+import type { AsenaWebsocketAdapter, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
   AsenaAdapter,
   type AsenaServeOptions,
@@ -17,23 +11,21 @@ import {
   type RouteParams,
   VALIDATOR_METHODS,
   type ValidatorHandler,
-} from "@asenajs/asena/adapter";
-import type { HonoErrorHandler, HonoHandler } from "./types";
-import { green, type ServerLogger, yellow } from "@asenajs/asena/logger";
-import { type Hook, zValidator } from "@hono/zod-validator";
-import type { ValidationSchema, ValidationSchemaWithHook } from "./defaults";
-import type { ZodType, ZodTypeDef } from "zod";
-import { middlewareParser } from "./utils/middlewareParser";
-import type { Context as HonoAdapterContext } from "./defaults/Context";
-import { HttpMethod } from "@asenajs/asena/web-types";
+} from '@asenajs/asena/adapter';
+import type { HonoErrorHandler, HonoHandler } from './types';
+import { green, type ServerLogger, yellow } from '@asenajs/asena/logger';
+import { type Hook, zValidator } from '@hono/zod-validator';
+import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
+import type { ZodType, ZodTypeDef } from 'zod';
+import { middlewareParser } from './utils/middlewareParser';
+import type { Context as HonoAdapterContext } from './defaults/Context';
+import { HttpMethod } from '@asenajs/asena/web-types';
+import { HonoWebsocketAdapter } from './HonoWebsocketAdapter';
+import type { WebSocketData } from '@asenajs/asena/web-socket';
 
-export class HonoAdapter extends AsenaAdapter<
-  Hono,
-  HonoAdapterContext,
-  ValidationSchema,
-  AsenaWebsocketAdapter<Hono, HonoAdapterContext>
-> {
-  public name = "HonoAdapter";
+export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
+
+  public name = 'HonoAdapter';
 
   public app = new Hono();
 
@@ -43,20 +35,12 @@ export class HonoAdapter extends AsenaAdapter<
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
 
   private readonly methodMap = {
-    [HttpMethod.GET]: (
-      path: string,
-      ...handlers: (MiddlewareHandler | Handler)[]
-    ) => this.app.get(path, ...handlers),
-    [HttpMethod.POST]: (path: string, ...handlers: any[]) =>
-      this.app.post(path, ...handlers),
-    [HttpMethod.PUT]: (path: string, ...handlers: any[]) =>
-      this.app.put(path, ...handlers),
-    [HttpMethod.DELETE]: (path: string, ...handlers: any[]) =>
-      this.app.delete(path, ...handlers),
-    [HttpMethod.PATCH]: (path: string, ...handlers: any[]) =>
-      this.app.patch(path, ...handlers),
-    [HttpMethod.OPTIONS]: (path: string, ...handlers: any[]) =>
-      this.app.options(path, ...handlers),
+    [HttpMethod.GET]: (path: string, ...handlers: (MiddlewareHandler | Handler)[]) => this.app.get(path, ...handlers),
+    [HttpMethod.POST]: (path: string, ...handlers: any[]) => this.app.post(path, ...handlers),
+    [HttpMethod.PUT]: (path: string, ...handlers: any[]) => this.app.put(path, ...handlers),
+    [HttpMethod.DELETE]: (path: string, ...handlers: any[]) => this.app.delete(path, ...handlers),
+    [HttpMethod.PATCH]: (path: string, ...handlers: any[]) => this.app.patch(path, ...handlers),
+    [HttpMethod.OPTIONS]: (path: string, ...handlers: any[]) => this.app.options(path, ...handlers),
     [HttpMethod.CONNECT]: (path: string, ...handlers: any[]) =>
       this.app.on(HttpMethod.CONNECT.toUpperCase(), path, ...handlers),
     [HttpMethod.HEAD]: (path: string, ...handlers: any[]) =>
@@ -65,12 +49,11 @@ export class HonoAdapter extends AsenaAdapter<
       this.app.on(HttpMethod.TRACE.toUpperCase(), path, ...handlers),
   };
 
-  public constructor(
-    websocketAdapter: AsenaWebsocketAdapter<Hono, HonoAdapterContext>,
-    logger?: ServerLogger,
-  ) {
-    super(websocketAdapter, logger);
-    this.websocketAdapter.app = this.app;
+  public constructor(logger: ServerLogger, websocketAdapter?: AsenaWebsocketAdapter) {
+    super(logger, websocketAdapter);
+    if (!this.websocketAdapter) {
+      this.websocketAdapter = new HonoWebsocketAdapter(logger);
+    }
 
     // to ensure that the logger is set
     if (!this.websocketAdapter.logger && logger) {
@@ -93,35 +76,59 @@ export class HonoAdapter extends AsenaAdapter<
   public async registerRoute({
     method,
     path,
-    middleware,
+    middlewares,
     handler,
     staticServe,
     validator,
   }: RouteParams<HonoAdapterContext, ValidationSchema>) {
-    const middlewares = this.prepareMiddlewares(middleware);
+    const prepareMiddlewares = this.prepareMiddlewares(middlewares);
 
     const allMiddlewares: MiddlewareHandler[] = validator
-      ? [...(await this.prepareValidator(validator)), ...middlewares]
-      : middlewares;
+      ? [...(await this.prepareValidator(validator)), ...prepareMiddlewares]
+      : prepareMiddlewares;
 
-    const routeHandler = staticServe
-      ? allMiddlewares
-      : [...allMiddlewares, this.prepareHandler(handler)];
+    const routeHandler = staticServe ? allMiddlewares : [...allMiddlewares, this.prepareHandler(handler)];
 
     const methodHandler = this.methodMap[method];
 
     if (!methodHandler) {
-      throw new Error("Invalid method");
+      throw new Error('Invalid method');
     }
 
     methodHandler(path, ...routeHandler);
     this.logger.info(
-      `${green("Successfully")} registered ${yellow(method.toUpperCase())} route for PATH: ${green(`${path}`)}`,
+      `${green('Successfully')} registered ${yellow(method.toUpperCase())} route for PATH: ${green(`${path}`)}`,
     );
   }
 
+  public registerWebsocketRoute({
+    path,
+    websocketService,
+    middlewares,
+  }: WebsocketRouteParams<HonoAdapterContext>): Promise<void> | void {
+    const preparedMiddlewares = this.prepareMiddlewares(middlewares);
+
+    this.app.get(`/${path}`, ...preparedMiddlewares, async (c: Context, next) => {
+      const websocketData = c.get('_websocketData') || {};
+
+
+      const id = bun.randomUUIDv7();
+
+      const data: WebSocketData = { values: websocketData, id, path: path };
+      const upgradeResult = this.server.upgrade(c.req.raw, { data });
+
+      if (upgradeResult) {
+        return new Response(null);
+      }
+
+      await next(); // Failed
+    });
+
+    this.websocketAdapter.registerWebSocket(websocketService);
+  }
+
   public async start() {
-    this.websocketAdapter.buildWebsocket(this.options?.wsOptions);
+    this.websocketAdapter.prepareWebSocket(this.options?.wsOptions);
 
     this.server = bun.serve({
       ...this.options.serveOptions,
@@ -131,7 +138,6 @@ export class HonoAdapter extends AsenaAdapter<
     });
 
     this.websocketAdapter.startWebsocket(this.server);
-
     return this.server;
   }
 
@@ -141,9 +147,7 @@ export class HonoAdapter extends AsenaAdapter<
     });
   }
 
-  public async serveOptions(
-    options: () => Promise<AsenaServeOptions> | AsenaServeOptions,
-  ) {
+  public async serveOptions(options: () => Promise<AsenaServeOptions> | AsenaServeOptions) {
     this.options = await options();
   }
 
@@ -151,9 +155,7 @@ export class HonoAdapter extends AsenaAdapter<
     this.port = port;
   }
 
-  private prepareMiddlewares(
-    middlewares: BaseMiddleware<HonoAdapterContext>[],
-  ): MiddlewareHandler[] {
+  private prepareMiddlewares(middlewares: BaseMiddleware<HonoAdapterContext>[]): MiddlewareHandler[] {
     return middlewareParser(middlewares);
   }
 
@@ -172,24 +174,19 @@ export class HonoAdapter extends AsenaAdapter<
 
     for (const key of VALIDATOR_METHODS) {
       // if the key is not a validator method, skip
-      if (
-        typeof (baseValidator[key] as BaseMiddleware<HonoAdapterContext>)
-          ?.handle !== "function"
-      ) {
+      if (typeof (baseValidator[key] as BaseMiddleware<HonoAdapterContext>)?.handle !== 'function') {
         continue;
       }
 
-      const validator: ValidatorHandler<
-        ValidationSchema | ValidationSchemaWithHook
-      > = baseValidator[key];
+      const validator: ValidatorHandler<ValidationSchema | ValidationSchemaWithHook> = baseValidator[key];
 
       const validationSchema = await validator.handle();
       let schema: ZodType<any, ZodTypeDef, any>;
       let hook: Hook<any, any, any>;
 
-      if ("schema" in validationSchema) {
-        schema = validationSchema["schema"];
-        hook = validationSchema["hook"];
+      if ('schema' in validationSchema) {
+        schema = validationSchema['schema'];
+        hook = validationSchema['hook'];
       } else {
         schema = validationSchema as ZodType<any, ZodTypeDef, any>;
       }
@@ -201,6 +198,7 @@ export class HonoAdapter extends AsenaAdapter<
   }
 
   private normalizePath(path: string): string {
-    return `${path.endsWith("/") ? path : `${path}/`}*`;
+    return `${path.endsWith('/') ? path : `${path}/`}*`;
   }
+
 }

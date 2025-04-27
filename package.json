@@ -2,7 +2,6 @@
   "name": "@asenajs/hono-adapter",
   "module": "index.ts",
   "description": "Hono server and websocket adapter for Asenajs ",
-  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
