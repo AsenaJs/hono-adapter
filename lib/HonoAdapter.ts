@@ -2,7 +2,7 @@ import { type Context, type Handler, Hono, type MiddlewareHandler, type Validati
 import type { Server } from 'bun';
 import * as bun from 'bun';
 import { HonoContextWrapper } from './HonoContextWrapper';
-import type { AsenaWebsocketAdapter, WebsocketRouteParams } from '@asenajs/asena/adapter';
+import type { AsenaWebsocketAdapter, BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
   AsenaAdapter,
   type AsenaServeOptions,
@@ -12,7 +12,7 @@ import {
   VALIDATOR_METHODS,
   type ValidatorHandler,
 } from '@asenajs/asena/adapter';
-import type { HonoErrorHandler, HonoHandler } from './types';
+import type { HonoErrorHandler, HonoHandler, StaticServeExtras } from './types';
 import { green, type ServerLogger, yellow } from '@asenajs/asena/logger';
 import { type Hook, zValidator } from '@hono/zod-validator';
 import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
@@ -22,6 +22,7 @@ import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
 import { HonoWebsocketAdapter } from './HonoWebsocketAdapter';
 import type { WebSocketData } from '@asenajs/asena/web-socket';
+import { serveStatic } from 'hono/bun';
 
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
 
@@ -80,20 +81,29 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     handler,
     staticServe,
     validator,
-  }: RouteParams<HonoAdapterContext, ValidationSchema>) {
+  }: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>) {
     const prepareMiddlewares = this.prepareMiddlewares(middlewares);
 
     const allMiddlewares: MiddlewareHandler[] = validator
       ? [...(await this.prepareValidator(validator)), ...prepareMiddlewares]
       : prepareMiddlewares;
 
-    const routeHandler = staticServe ? allMiddlewares : [...allMiddlewares, this.prepareHandler(handler)];
-
     const methodHandler = this.methodMap[method];
 
     if (!methodHandler) {
       throw new Error('Invalid method');
     }
+
+    if (staticServe) {
+      methodHandler(path, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(staticServe)));
+
+      this.logger.info(
+        `${green('Successfully')} registered ${yellow('Static Serve ' + method.toUpperCase())} route for PATH: ${green(`${path}`)}`,
+      );
+      return;
+    }
+
+    const routeHandler = [...allMiddlewares, this.prepareHandler(handler)];
 
     methodHandler(path, ...routeHandler);
     this.logger.info(
@@ -110,7 +120,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     this.app.get(`/${path}`, ...preparedMiddlewares, async (c: Context, next) => {
       const websocketData = c.get('_websocketData') || {};
-
 
       const id = bun.randomUUIDv7();
 
@@ -161,6 +170,53 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   private prepareHandler(handler: HonoHandler): Handler {
     return (c: Context) => handler(new HonoContextWrapper(c));
+  }
+
+  private prepareStaticServeOptions(staticServe: BaseStaticServeParams) {
+    let staticServeOptions: {
+      root?: string;
+      path?: string;
+      precompressed?: boolean;
+      mimes?: Record<string, string>;
+      rewriteRequestPath?: (path: string) => string;
+      onFound?: (path: string, c: Context) => void | Promise<void>;
+      onNotFound?: (path: string, c: Context) => void | Promise<void>;
+    } = {
+      root: staticServe.root,
+    };
+
+    if (staticServe.rewriteRequestPath) {
+      staticServeOptions.rewriteRequestPath = staticServe.rewriteRequestPath;
+    }
+
+    if (staticServe.onFound) {
+      if (staticServe.onFound.override) {
+        // @ts-ignore
+        staticServeOptions.onFound = staticServe.onFound.handler;
+      } else {
+        staticServeOptions.onFound = (path, c: Context) => {
+          staticServe.onFound.handler(path, new HonoContextWrapper(c));
+        };
+      }
+    }
+
+    if (staticServe.onNotFound) {
+      if (staticServe.onNotFound.override) {
+        // @ts-ignore
+        staticServeOptions.onNotFound = staticServe.onNotFound.handler;
+      } else {
+        staticServeOptions.onNotFound = (path, c: Context) => {
+          staticServe.onNotFound.handler(path, new HonoContextWrapper(c));
+        };
+      }
+    }
+
+    if (staticServe.extra) {
+      staticServeOptions.mimes = staticServe.extra.mimes;
+      staticServeOptions.precompressed = staticServe.extra.precompressed;
+    }
+
+    return staticServeOptions;
   }
 
   private async prepareValidator(
