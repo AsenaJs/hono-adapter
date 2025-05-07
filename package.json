@@ -2,7 +2,6 @@
   "name": "@asenajs/hono-adapter",
   "module": "index.ts",
   "description": "Hono server and websocket adapter for Asenajs ",
-  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -12,6 +11,10 @@
   ],
   "version": "1.0.0",
   "author": "LibirSoft",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AsenaJs/hono-adapter.git"
+  },
   "license": "MIT",
   "scripts": {
     "test": "bun test",
@@ -22,7 +25,7 @@
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {
-    "@asenajs/asena": "^0.2.0",
+    "@asenajs/asena": "^0.3.0",
     "@changesets/cli": "^2.28.1",
     "@types/bun": "latest",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
