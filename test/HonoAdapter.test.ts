@@ -1074,8 +1074,10 @@ describe('HonoAdapter', () => {
 
       // Should have both HTTP and WS routes under same controller
       expect(log).toContain('ChatController');
-      expect(log).toContain('GET /chat/history');
-      expect(log).toContain('WS chat');
+      expect(log).toContain(
+        `/chat/history`,
+      );
+      expect(log).toContain('WS\u001B[0m chat');
     });
 
     it('should handle controllers sorted alphabetically', async () => {

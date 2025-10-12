@@ -1,18 +1,8 @@
-import {
-  type Context,
-  type Handler,
-  Hono,
-  type MiddlewareHandler,
-  type ValidationTargets
-} from 'hono';
+import { type Context, type Handler, Hono, type MiddlewareHandler, type ValidationTargets } from 'hono';
 import type { Server } from 'bun';
 import * as bun from 'bun';
 import { HonoContextWrapper } from './HonoContextWrapper';
-import type {
-  AsenaWebsocketAdapter,
-  BaseStaticServeParams,
-  WebsocketRouteParams
-} from '@asenajs/asena/adapter';
+import type { AsenaWebsocketAdapter, BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
   AsenaAdapter,
   type AsenaServeOptions,
@@ -22,7 +12,7 @@ import {
   VALIDATOR_METHODS,
   type ValidatorHandler,
 } from '@asenajs/asena/adapter';
-import type { GlobalMiddlewareConfig } from '@asenajs/asena/server/config';
+import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asenajs/asena/server/config';
 import { shouldApplyMiddleware } from '@asenajs/asena/utils/patternMatcher';
 import type { HonoErrorHandler, HonoHandler, StaticServeExtras } from './types';
 import { blue, green, red, type ServerLogger, yellow } from '@asenajs/asena/logger';
@@ -120,7 +110,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * });
    * ```
    */
-  public use(middleware: BaseMiddleware<HonoAdapterContext>, config?: GlobalMiddlewareConfig['routes']) {
+  public use(middleware: BaseMiddleware<HonoAdapterContext>, config?: GlobalMiddlewareRouteConfig) {
     // Store middleware with config for deferred application during route registration
     this.globalMiddlewares.push({ middleware, config });
   }
@@ -553,7 +543,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       const routeText = routeCount === 1 ? 'route' : 'routes';
 
       this.logger.info(
-        `${green('✓')} Successfully registered ${yellow('CONTROLLER')} ${blue(controllerName)} ${yellow(`(${routeCount} ${routeText})`)}`
+        `${green('✓')} Successfully registered ${yellow('CONTROLLER')} ${blue(controllerName)} ${yellow(`(${routeCount} ${routeText})`)}`,
       );
     }
 
@@ -564,7 +554,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         const routeText = routeCount === 1 ? 'route' : 'routes';
 
         this.logger.info(
-          `${green('✓')} Successfully registered ${yellow('WEBSOCKET')} ${blue(controllerName)} ${yellow(`(${routeCount} ${routeText})`)}`
+          `${green('✓')} Successfully registered ${yellow('WEBSOCKET')} ${blue(controllerName)} ${yellow(`(${routeCount} ${routeText})`)}`,
         );
       }
     }
