@@ -56,7 +56,7 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     return this._context.req.queries(query);
   }
 
-  public send(data: string | any, statusOrOptions?: SendOptions | number) {
+  public send(data: string | any, statusOrOptions?: SendOptions | number): Response {
     const { headers = {}, status = 200 } =
       typeof statusOrOptions === 'number' ? { status: statusOrOptions } : statusOrOptions || {};
 
