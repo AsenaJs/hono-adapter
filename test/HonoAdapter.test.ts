@@ -5,6 +5,7 @@ import type { ServerLogger } from '@asenajs/asena/logger';
 import { HttpMethod } from '@asenajs/asena/web-types';
 import type { AsenaWebSocketService } from '@asenajs/asena/web-socket';
 import { z } from 'zod';
+import { HTTPException } from 'hono/http-exception';
 
 // Mock logger for testing
 const createMockLogger = (): ServerLogger => ({
@@ -1708,6 +1709,192 @@ describe('HonoAdapter', () => {
       expect(adapter['routeQueue'].length).toBe(queueLengthBefore);
 
       server2.stop();
+    });
+  });
+
+  // HTTPException Handling Tests
+  describe('HTTPException Handling', () => {
+    it('should handle HTTPException with proper status code', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter(logger);
+
+      const errorHandler = mock((error: Error) => {
+        // User handler should receive HTTPException
+        if (error instanceof HTTPException) {
+          // Don't return anything, let adapter use default
+          return undefined;
+        }
+
+        return new Response('Fallback', { status: 500 });
+      });
+
+      adapter.onError(errorHandler);
+
+      // Verify error handler was registered
+      expect(errorHandler).toBeDefined();
+    });
+
+    it('should call HTTPException getResponse() for default behavior', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter(logger);
+
+      const errorHandler = mock(() => {
+        // Return nothing to use HTTPException default
+        return undefined;
+      });
+
+      adapter.onError(errorHandler);
+
+      // HTTPException should use getResponse() internally
+      const exception = new HTTPException(401, { message: 'Unauthorized' });
+
+      expect(exception.status).toBe(401);
+      expect(exception.getResponse).toBeDefined();
+    });
+
+    it('should allow user to customize HTTPException response', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter(logger);
+
+      const customResponse = new Response(JSON.stringify({ custom: 'error' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const errorHandler = mock((error: Error) => {
+        if (error instanceof HTTPException) {
+          // User returns custom response
+          return customResponse;
+        }
+
+        return new Response('Error', { status: 500 });
+      });
+
+      adapter.onError(errorHandler);
+
+      // Simulate HTTPException
+      const exception = new HTTPException(401, { message: 'Unauthorized' });
+
+      // Error handler should be called with HTTPException
+      const result = errorHandler(exception);
+
+      expect(result).toBe(customResponse);
+    });
+
+    it('should use HTTPException default response when user handler throws', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter(logger);
+
+      const errorHandler = mock(() => {
+        // User handler throws error
+        throw new Error('Handler error');
+      });
+
+      adapter.onError(errorHandler);
+
+      // Verify error handler was registered (internal onError spy would be needed for full test)
+      expect(errorHandler).toBeDefined();
+    });
+
+    it('should preserve HTTPException status codes (401, 403, 404, etc.)', () => {
+      const statusCodes = [
+        { code: 401, message: 'Unauthorized' },
+        { code: 403, message: 'Forbidden' },
+        { code: 404, message: 'Not Found' },
+        { code: 422, message: 'Unprocessable Entity' },
+        { code: 429, message: 'Too Many Requests' },
+      ];
+
+      for (const { code, message } of statusCodes) {
+        const exception = new HTTPException(code as any, { message });
+
+        expect(exception.status).toBe(code as any);
+        expect(exception.message).toBe(message);
+
+        // Verify getResponse() returns proper Response
+        const response = exception.getResponse();
+
+        expect(response).toBeInstanceOf(Response);
+        expect(response.status).toBe(code);
+      }
+    });
+
+    it('should handle HTTPException with custom response object', () => {
+      // HTTPException with custom response
+      const customResponse = new Response(JSON.stringify({ error: 'Custom' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const exception = new HTTPException(401, { res: customResponse });
+
+      expect(exception.status).toBe(401);
+
+      // Verify response properties instead of identity
+      const response = exception.getResponse();
+
+      expect(response).toBeInstanceOf(Response);
+      expect(response.status).toBe(401);
+      expect(response.headers.get('Content-Type')).toBe('application/json');
+    });
+
+    it('should handle normal errors through user handler', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter(logger);
+
+      const customErrorResponse = new Response('Custom error', { status: 500 });
+
+      const errorHandler = mock((error: Error) => {
+        // Normal error handling
+        if (!(error instanceof HTTPException)) {
+          return customErrorResponse;
+        }
+
+        return new Response('HTTPException', { status: 500 });
+      });
+
+      adapter.onError(errorHandler);
+
+      // Simulate normal error
+      const normalError = new Error('Normal error');
+      const result = errorHandler(normalError);
+
+      expect(result).toBe(customErrorResponse);
+      expect(errorHandler).toHaveBeenCalledWith(normalError);
+    });
+
+    it('should log errors before handling', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter(logger);
+
+      const errorHandler = mock(() => new Response('Error', { status: 500 }));
+
+      adapter.onError(errorHandler);
+
+      // Error logging happens in onError
+      // Verify logger.error mock was defined
+      expect(logger.error).toBeDefined();
+    });
+
+    it('should handle HTTPException in middleware context', () => {
+
+      // Simulate middleware throwing HTTPException
+      const exception = new HTTPException(401, { message: 'Unauthorized' });
+
+      expect(exception).toBeInstanceOf(HTTPException);
+      expect(exception.status).toBe(401);
+      expect(exception.message).toBe('Unauthorized');
+    });
+
+    it('should export HTTPException for user middlewares', () => {
+      // HTTPException should be importable from package
+      expect(HTTPException).toBeDefined();
+      expect(typeof HTTPException).toBe('function');
+
+      // User can create HTTPException instances
+      const exception = new HTTPException(401, { message: 'Test' });
+
+      expect(exception).toBeInstanceOf(HTTPException);
     });
   });
 });

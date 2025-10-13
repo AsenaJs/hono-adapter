@@ -1,4 +1,5 @@
 import { type Context, type Handler, Hono, type MiddlewareHandler, type ValidationTargets } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import type { Server } from 'bun';
 import * as bun from 'bun';
 import { HonoContextWrapper } from './HonoContextWrapper';
@@ -168,7 +169,28 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   /**
    * Registers global error handler with enhanced error handling capabilities
+   *
+   * Supports Hono's HTTPException for proper status code handling:
+   * - HTTPException instances are passed to user handler for custom handling
+   * - If user handler returns a response, it's used
+   * - Otherwise, HTTPException's default response is returned
+   * - Other errors follow normal error handling flow
+   *
    * @param errorHandler - Custom error handler function
+   *
+   * @example
+   * ```typescript
+   * adapter.onError((error, context) => {
+   *   // HTTPException handling (optional custom behavior)
+   *   if (error instanceof HTTPException) {
+   *     // Add custom logging or return custom response
+   *     return context.send({ custom: 'response' }, error.status);
+   *   }
+   *
+   *   // Other errors
+   *   return context.send({ error: 'Internal error' }, 500);
+   * });
+   * ```
    */
   public onError(errorHandler: HonoErrorHandler) {
     this.app.onError((error, context) => {
@@ -181,11 +203,30 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         timestamp: new Date().toISOString(),
       });
 
-      // Wrap context
+      // Wrap context for user handler
       const wrapper = new HonoContextWrapper(context);
 
+      // Handle HTTPException with Hono's standard pattern
+      if (error instanceof HTTPException) {
+        try {
+          // Allow user to customize HTTPException handling
+          const customResponse = errorHandler(error, wrapper);
+
+          // If user returned a response, use it
+          if (customResponse) {
+            return customResponse;
+          }
+        } catch (handlerError) {
+          // User handler failed, log and fallback to HTTPException's default response
+          this.logger.error('Error handler threw an error for HTTPException, using default response:', handlerError);
+        }
+
+        // Return HTTPException's default response (proper status code + message)
+        return error.getResponse();
+      }
+
+      // Handle other errors through user-defined handler
       try {
-        // Call user-defined error handler
         return errorHandler(error, wrapper);
       } catch (handlerError) {
         // Fallback if error handler itself throws
