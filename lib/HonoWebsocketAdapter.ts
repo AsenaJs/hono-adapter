@@ -100,7 +100,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
     this.websockets.set(namespace, webSocketService);
   }
 
-  public startWebsocket(server: Server) {
+  public startWebsocket(server: Server<WebSocketData>) {
     if (!this.websockets || this.websockets.size < 1) {
       return;
     }

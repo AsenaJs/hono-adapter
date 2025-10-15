@@ -33,7 +33,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   public app = new Hono();
 
-  private server: Server;
+  private server: Server<WebSocketData>;
 
   // @ts-ignore
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
@@ -153,7 +153,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       port: this.port,
       fetch: this.app.fetch,
       websocket: this.websocketAdapter.websocket,
-    });
+    } as any);
 
     this.websocketAdapter.startWebsocket(this.server);
 

@@ -9,7 +9,7 @@
     "README.md",
     "LICENSE"
   ],
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "LibirSoft",
   "repository": {
     "type": "git",
@@ -28,7 +28,6 @@
     "benchmark:adapter": "bun run benchmark/hono-adapter.ts"
   },
   "devDependencies": {
-    "@asenajs/asena": "link:@asenajs/asena",
     "@changesets/cli": "^2.29.7",
     "@types/bun": "latest",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
@@ -46,8 +45,9 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@asenajs/asena": "^0.4.0",
     "@hono/zod-validator": "^0.4.3",
-    "hono": "^4.9.10",
+    "hono": "^4.9.12",
     "zod": "^3.25.76"
   }
 }
