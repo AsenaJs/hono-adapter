@@ -4,12 +4,12 @@
     "": {
       "name": "@asenajs/hono-adapter",
       "dependencies": {
+        "@asenajs/asena": "^0.5.0",
         "@hono/zod-validator": "^0.4.3",
         "hono": "^4.9.12",
         "zod": "^3.25.76",
       },
       "devDependencies": {
-        "@asenajs/asena": "^0.4.0",
         "@changesets/cli": "^2.29.7",
         "@types/bun": "latest",
         "@typescript-eslint/eslint-plugin": "^6.21.0",
@@ -29,7 +29,7 @@
     },
   },
   "packages": {
-    "@asenajs/asena": ["@asenajs/asena@0.4.0", "", { "dependencies": { "reflect-metadata": "^0.2.2" } }, "sha512-aVgzJK8WzilOQ9wy1vtRTEXrm1Tr2CUpUlRjlk0CJH4FLk3/By5twgqwmyie4Brh8bRDauHzeuJRgejiyo+w5A=="],
+    "@asenajs/asena": ["@asenajs/asena@0.5.0", "", { "dependencies": { "reflect-metadata": "^0.2.2" } }, "sha512-oxnG3BKvyUopDjClUPDNGfMZIQ6CtbVclMfZZWn5ppx08UBjMD1b2O87Q5qNhXfvZAzf7CxDLCy6op6uJrVoyw=="],
 
     "@babel/runtime": ["@babel/runtime@7.27.0", "", { "dependencies": { "regenerator-runtime": "^0.14.0" } }, "sha512-VtPOkrdPHZsKc/clNqyi9WUA8TINkZ4cGk63UUE3u4pmB2k+ZMQRDuIOagv8UVd6j7k0T3+RRIb7beKTebNbcw=="],
 
@@ -355,7 +355,7 @@
 
     "hasown": ["hasown@2.0.2", "", { "dependencies": { "function-bind": "^1.1.2" } }, "sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ=="],
 
-    "hono": ["hono@4.9.12", "", {}, "sha512-SrTC0YxqPwnN7yKa8gg/giLyQ2pILCKoideIHbYbFQlWZjYt68D2A4Ae1hehO/aDQ6RmTcpqOV/O2yBtMzx/VQ=="],
+    "hono": ["hono@4.10.1", "", {}, "sha512-rpGNOfacO4WEPClfkEt1yfl8cbu10uB1lNpiI33AKoiAHwOS8lV748JiLx4b5ozO/u4qLjIvfpFsPXdY5Qjkmg=="],
 
     "human-id": ["human-id@4.1.1", "", { "bin": { "human-id": "dist/cli.js" } }, "sha512-3gKm/gCSUipeLsRYZbbdA1BD83lBoWUkZ7G9VFrhWPAU76KwYo5KR8V28bpoPm/ygy0x5/GCbpRQdY7VLYCoIg=="],
 
