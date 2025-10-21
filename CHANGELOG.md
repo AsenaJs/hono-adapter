@@ -1,5 +1,11 @@
 # @asenajs/hono-adapter
 
+## 1.3.0
+
+### Minor Changes
+
+- fix(lib): New AsenaWebSocketServer implemented
+
 ## 1.2.0
 
 ### Minor Changes

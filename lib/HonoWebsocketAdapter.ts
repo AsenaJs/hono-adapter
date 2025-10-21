@@ -18,7 +18,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
 
   private connectionLimits: Map<string, number> = new Map(); // namespace -> max connections
 
-  private heartbeatIntervals: Map<string, NodeJS.Timeout> = new Map(); // connection ID -> interval
+  private heartbeatIntervals: Map<string, Timer> = new Map(); // connection ID -> interval (Bun native Timer)
 
   public constructor(logger: ServerLogger) {
     super(logger);
@@ -100,13 +100,22 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
     this.websockets.set(namespace, webSocketService);
   }
 
+  /**
+   * Starts WebSocket server and initializes a single shared AsenaWebSocketServer
+   * All WebSocket services share the same wrapper instance for efficiency
+   * @param server - Bun Server instance
+   */
   public startWebsocket(server: Server<WebSocketData>) {
     if (!this.websockets || this.websockets.size < 1) {
       return;
     }
 
-    for (const [namespace, websocket] of this.websockets) {
-      websocket.server = new AsenaWebSocketServer(server, namespace);
+    // Create a single shared wrapper for all WebSocket services
+    const sharedServer = new AsenaWebSocketServer(server);
+
+    // Assign the shared wrapper to all services
+    for (const websocket of this.websockets.values()) {
+      websocket.server = sharedServer;
     }
   }
 
