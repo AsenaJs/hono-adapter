@@ -28,6 +28,7 @@
  */
 
 import { type Context, MiddlewareService } from '../defaults';
+import { HTTPException } from 'hono/http-exception';
 
 /**
  * CORS configuration options
@@ -170,7 +171,7 @@ export class CorsMiddleware extends MiddlewareService {
 
     if (!allowedOrigin) {
       // Origin not allowed → block request
-      return new Response('CORS: Origin not allowed', { status: 403 });
+      throw new HTTPException(403, { res: new Response('CORS: Origin not allowed')});
     }
 
     // Set CORS headers using Hono's context (access via context.context for HonoContextWrapper)
@@ -201,7 +202,8 @@ export class CorsMiddleware extends MiddlewareService {
       }
 
       // Return 204 No Content for preflight
-      return new Response(null, { status: 204, headers });
+      // @ts-ignore
+      throw new HTTPException(204, { res: new Response(null, { headers }) });
     }
 
     // For actual requests, continue to handler

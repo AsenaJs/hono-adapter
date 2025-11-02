@@ -14,7 +14,7 @@ import {
   type ValidatorHandler,
 } from '@asenajs/asena/adapter';
 import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asenajs/asena/server/config';
-import { shouldApplyMiddleware } from '@asenajs/asena/utils/patternMatcher';
+import { shouldApplyMiddleware } from '@asenajs/asena/utlis';
 import type { HonoErrorHandler, HonoHandler, StaticServeExtras } from './types';
 import { blue, green, red, type ServerLogger, yellow } from '@asenajs/asena/logger';
 import { type Hook, zValidator } from '@hono/zod-validator';

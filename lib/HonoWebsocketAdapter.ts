@@ -232,9 +232,9 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
 
   private createHandler(type: keyof WSEvents) {
     return async (ws: ServerWebSocket<WebSocketData>, ...args: any[]) => {
-      const websocket = this.websockets.get(ws.data.path);
+      const asenaWebSocketService = this.websockets.get(ws.data.path);
 
-      if (!websocket) {
+      if (!asenaWebSocketService) {
         this.logger.error(`WebSocket handler not found for path: ${ws.data.path}`);
         // Close connection with error code if handler not found
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
@@ -244,18 +244,18 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
         return;
       }
 
-      let handler = websocket[type];
+      let handler = asenaWebSocketService[type];
 
       if (!handler) {
         // Not all handlers are required, so this is not an error
         return;
       }
 
-      handler = handler.bind(websocket);
+      handler = handler.bind(asenaWebSocketService);
 
       try {
         await (handler as (socket: AsenaSocket<WebSocketData>, ...args: any[]) => void | Promise<void>)(
-          new AsenaSocket(ws, websocket),
+          new AsenaSocket(ws, asenaWebSocketService.namespace),
           ...args,
         );
       } catch (error) {
