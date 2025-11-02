@@ -4,6 +4,10 @@ coverage = true
 
 coverageSkipTestFiles = true
 
+coveragePathIgnorePatterns = [
+    "lib/defaults/*.ts",
+]
+
 
 
 [test.reporter]

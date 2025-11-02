@@ -99,7 +99,6 @@ export interface CorsOptions {
  * 4. For other requests → set CORS headers and call next()
  */
 export class CorsMiddleware extends MiddlewareService {
-
   private readonly origin: '*' | string | string[] | ((origin: string) => boolean);
 
   private readonly methods: string;
@@ -243,5 +242,4 @@ export class CorsMiddleware extends MiddlewareService {
 
     return null;
   }
-
 }

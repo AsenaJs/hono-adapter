@@ -131,9 +131,7 @@ describe('Integration Tests', () => {
   });
 
   it('should handle multiple concurrent requests', async () => {
-    const requests = Array.from({ length: 10 }, (_, i) =>
-      fetch(`${baseUrl}/users/${i}`).then((r) => r.json()),
-    );
+    const requests = Array.from({ length: 10 }, (_, i) => fetch(`${baseUrl}/users/${i}`).then((r) => r.json()));
 
     const results = await Promise.all(requests);
 
