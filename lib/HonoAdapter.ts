@@ -157,7 +157,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     // Log controller-based route information
     if (this.routeQueue.length > 0 || this.wsRouteQueue.length > 0) {
-      this.logger.info(this.buildControllerBasedLog());
+      this.logger.info('\n' + this.buildControllerBasedLog());
     }
 
     this.logger.info(`Server running at http://localhost:${this.server.port}`);

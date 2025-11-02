@@ -1,5 +1,28 @@
 # @asenajs/hono-adapter
 
+## 1.4.0
+
+### Minor Changes
+
+- chore(asena) asena version updated
+
+### Patch Changes
+
+- fix(middleware): middleware Response handling and ESLint v9 migration
+
+  **Middleware Fixes:**
+  - Replaced HTTPException with Response return in CorsMiddleware and RateLimiterMiddleware
+  - Added Response handling support to middlewareParser
+  - Aligned with Hono's middleware best practices
+  - All middleware tests passing (44/44 tests pass)
+
+  **ESLint v9 Migration:**
+  - Migrated from ESLint v8 to v9 flat config system
+  - Updated @typescript-eslint packages to 8.46.2
+  - Added adapter-specific ignore rules (examples/**, benchmark/**)
+  - Replaced @ts-ignore with @ts-expect-error directives
+  - Fixed all lint errors (0 errors, 51 warnings)
+
 ## 1.3.0
 
 ### Minor Changes
