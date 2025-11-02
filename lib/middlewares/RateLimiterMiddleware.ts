@@ -226,7 +226,6 @@ export interface RateLimiterOptions {
  * ```
  */
 export class RateLimiterMiddleware extends MiddlewareService {
-
   /**
    * Instance-specific bucket storage
    * Key: Client identifier (IP, user ID, etc.)
@@ -306,7 +305,7 @@ export class RateLimiterMiddleware extends MiddlewareService {
     // Pre-process and store configuration
     this.capacity = options.capacity ?? 100;
     this.refillRate = options.refillRate ?? 10;
-    this.keyGenerator = options.keyGenerator ?? this.defaultKeyGenerator;
+    this.keyGenerator = options.keyGenerator ?? this.defaultKeyGenerator.bind(this);
     this.message = options.message ?? 'Rate limit exceeded. Please try again later.';
     this.statusCode = options.statusCode ?? 429;
     this.cost = options.cost ?? 1;
@@ -338,7 +337,7 @@ export class RateLimiterMiddleware extends MiddlewareService {
    */
   public async handle(context: Context, next: () => Promise<void>): Promise<any> {
     // Check skip predicate
-    if (this.skip && this.skip(context)) {
+    if (this.skip?.(context)) {
       return await next();
     }
 
@@ -464,5 +463,4 @@ export class RateLimiterMiddleware extends MiddlewareService {
     // Unref timer to allow process to exit
     this.cleanupTimer.unref();
   }
-
 }

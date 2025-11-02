@@ -15,7 +15,7 @@ export const middlewareParser = (middlewares: BaseMiddleware<HonoAdapterContext>
 
   return middlewares.map((middleware) => {
     if (middleware.override) {
-      // @ts-ignore - Allow override middleware to use raw Hono context
+      // @ts-expect-error - Allow override middleware to use raw Hono context
       return (c: Context, next: Function) => middleware.handle(c, next);
     }
 
@@ -36,6 +36,12 @@ export const middlewareParser = (middlewares: BaseMiddleware<HonoAdapterContext>
         // If middleware returns false, stop the pipeline
         if (result === false) {
           return;
+        }
+
+        // If middleware returns Response, return it to Hono
+        // This allows middleware to short-circuit the chain (like Hono's built-in CORS)
+        if (result instanceof Response) {
+          return result;
         }
 
         // If middleware didn't call next(), we call it here

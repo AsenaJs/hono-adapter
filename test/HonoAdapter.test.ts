@@ -1075,9 +1075,7 @@ describe('HonoAdapter', () => {
 
       // Should have both HTTP and WS routes under same controller
       expect(log).toContain('ChatController');
-      expect(log).toContain(
-        `/chat/history`,
-      );
+      expect(log).toContain(`/chat/history`);
       expect(log).toContain('WS\u001B[0m chat');
     });
 
@@ -1529,20 +1527,16 @@ describe('HonoAdapter', () => {
 
       // Use class instances instead of plain objects for proper constructor comparison
       class AuthMiddleware {
-
         public handle = mock(() => true);
 
         public override = false;
-      
-}
+      }
 
       class LoggingMiddleware {
-
         public handle = mock(() => true);
 
         public override = false;
-      
-}
+      }
 
       const authMiddleware = new AuthMiddleware();
       const loggingMiddleware = new LoggingMiddleware();
@@ -1877,7 +1871,6 @@ describe('HonoAdapter', () => {
     });
 
     it('should handle HTTPException in middleware context', () => {
-
       // Simulate middleware throwing HTTPException
       const exception = new HTTPException(401, { message: 'Unauthorized' });
 

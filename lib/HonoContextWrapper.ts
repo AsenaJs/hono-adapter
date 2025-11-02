@@ -5,7 +5,6 @@ import type { CookieOptions } from 'hono/utils/cookie';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, Response> {
-
   private _context: Context;
 
   public constructor(context: Context) {
@@ -139,5 +138,4 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
   public set context(value: Context) {
     this._context = value;
   }
-
 }

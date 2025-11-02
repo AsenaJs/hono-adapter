@@ -47,7 +47,7 @@ describe('HonoWebsocketAdapter - Enhanced Tests', () => {
 
       adapter.registerWebSocket(service as any);
 
-     expect(adapter["_websockets"]).toHaveLength(1)
+      expect(adapter['_websockets']).toHaveLength(1);
     });
 
     it('should throw error for null service', () => {

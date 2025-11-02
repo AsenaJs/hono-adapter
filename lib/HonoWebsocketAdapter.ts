@@ -11,7 +11,6 @@ import {
 import type { ServerLogger } from '@asenajs/asena/logger';
 
 export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
-
   public name = 'HonoWebsocketAdapter';
 
   private activeConnections: Map<string, Set<string>> = new Map(); // namespace -> Set of connection IDs
@@ -79,7 +78,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
     }
 
     // Validate namespace format (alphanumeric, hyphens, underscores, slashes)
-    if (!namespace.match(/^[a-zA-Z0-9\-_\/]+$/)) {
+    if (!/^[a-zA-Z0-9\-_/]+$/.exec(namespace)) {
       throw new Error(
         `Invalid WebSocket namespace format: "${namespace}". Only alphanumeric characters, hyphens, underscores, and slashes are allowed.`,
       );
@@ -149,7 +148,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
           this.activeConnections.set(namespace, new Set());
         }
 
-        this.activeConnections.get(namespace)!.add(ws.data.id);
+        this.activeConnections.get(namespace).add(ws.data.id);
 
         // Start heartbeat if enabled
         if (heartbeatInterval) {
@@ -232,9 +231,9 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
 
   private createHandler(type: keyof WSEvents) {
     return async (ws: ServerWebSocket<WebSocketData>, ...args: any[]) => {
-      const websocket = this.websockets.get(ws.data.path);
+      const asenaWebSocketService = this.websockets.get(ws.data.path);
 
-      if (!websocket) {
+      if (!asenaWebSocketService) {
         this.logger.error(`WebSocket handler not found for path: ${ws.data.path}`);
         // Close connection with error code if handler not found
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
@@ -244,18 +243,18 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
         return;
       }
 
-      let handler = websocket[type];
+      let handler = asenaWebSocketService[type];
 
       if (!handler) {
         // Not all handlers are required, so this is not an error
         return;
       }
 
-      handler = handler.bind(websocket);
+      handler = handler.bind(asenaWebSocketService);
 
       try {
         await (handler as (socket: AsenaSocket<WebSocketData>, ...args: any[]) => void | Promise<void>)(
-          new AsenaSocket(ws, websocket),
+          new AsenaSocket(ws, asenaWebSocketService.namespace),
           ...args,
         );
       } catch (error) {
@@ -290,5 +289,4 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
       }
     };
   }
-
 }
