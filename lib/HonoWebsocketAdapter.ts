@@ -11,7 +11,6 @@ import {
 import type { ServerLogger } from '@asenajs/asena/logger';
 
 export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
-
   public name = 'HonoWebsocketAdapter';
 
   private activeConnections: Map<string, Set<string>> = new Map(); // namespace -> Set of connection IDs
@@ -79,7 +78,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
     }
 
     // Validate namespace format (alphanumeric, hyphens, underscores, slashes)
-    if (!namespace.match(/^[a-zA-Z0-9\-_\/]+$/)) {
+    if (!/^[a-zA-Z0-9\-_/]+$/.exec(namespace)) {
       throw new Error(
         `Invalid WebSocket namespace format: "${namespace}". Only alphanumeric characters, hyphens, underscores, and slashes are allowed.`,
       );
@@ -149,7 +148,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
           this.activeConnections.set(namespace, new Set());
         }
 
-        this.activeConnections.get(namespace)!.add(ws.data.id);
+        this.activeConnections.get(namespace).add(ws.data.id);
 
         // Start heartbeat if enabled
         if (heartbeatInterval) {
@@ -290,5 +289,4 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
       }
     };
   }
-
 }

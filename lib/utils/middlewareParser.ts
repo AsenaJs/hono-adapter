@@ -15,7 +15,7 @@ export const middlewareParser = (middlewares: BaseMiddleware<HonoAdapterContext>
 
   return middlewares.map((middleware) => {
     if (middleware.override) {
-      // @ts-ignore - Allow override middleware to use raw Hono context
+      // @ts-expect-error - Allow override middleware to use raw Hono context
       return (c: Context, next: Function) => middleware.handle(c, next);
     }
 

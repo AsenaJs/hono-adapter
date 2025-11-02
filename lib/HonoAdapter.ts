@@ -28,14 +28,12 @@ import type { WebSocketData } from '@asenajs/asena/web-socket';
 import { serveStatic } from 'hono/bun';
 
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
-
   public name = 'HonoAdapter';
 
   public app = new Hono();
 
   private server: Server<WebSocketData>;
 
-  // @ts-ignore
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
 
   // Deferred route registration
@@ -51,10 +49,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Global middlewares with optional path filtering configuration
    * Middlewares are stored with their pattern config and applied during route registration
    */
-  private globalMiddlewares: Array<{
+  private globalMiddlewares: {
     middleware: BaseMiddleware<HonoAdapterContext>;
     config?: GlobalMiddlewareConfig['routes'];
-  }> = [];
+  }[] = [];
 
   private routesRegistered = false;
 
@@ -266,7 +264,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * @returns Configured static serve options for Hono
    */
   private prepareStaticServeOptions(staticServe: BaseStaticServeParams) {
-    let staticServeOptions: {
+    const staticServeOptions: {
       root?: string;
       path?: string;
       precompressed?: boolean;
@@ -284,7 +282,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     if (staticServe.onFound) {
       if (staticServe.onFound.override) {
-        // @ts-ignore
         staticServeOptions.onFound = staticServe.onFound.handler;
       } else {
         staticServeOptions.onFound = async (path, c: Context) => {
@@ -326,7 +323,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     if (staticServe.onNotFound) {
       if (staticServe.onNotFound.override) {
-        // @ts-ignore
         staticServeOptions.onNotFound = staticServe.onNotFound.handler;
       } else {
         staticServeOptions.onNotFound = (path, c: Context) => {
@@ -468,7 +464,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    */
   private extractBasePath(path: string): string {
     // Remove trailing slash
-    let normalized = path.endsWith('/') && path !== '/' ? path.slice(0, -1) : path;
+    const normalized = path.endsWith('/') && path !== '/' ? path.slice(0, -1) : path;
 
     // Find the last segment without parameters
     const segments = normalized.split('/');
@@ -501,7 +497,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         groups.set(basePath, []);
       }
 
-      groups.get(basePath)!.push(route);
+      groups.get(basePath).push(route);
     }
 
     return groups;
@@ -766,11 +762,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * // }
    * ```
    */
-  private groupRoutesByController(): Map<
-    string,
-    { basePath: string; routes: Array<{ method: string; path: string }> }
-  > {
-    const groups = new Map<string, { basePath: string; routes: Array<{ method: string; path: string }> }>();
+  private groupRoutesByController(): Map<string, { basePath: string; routes: { method: string; path: string }[] }> {
+    const groups = new Map<string, { basePath: string; routes: { method: string; path: string }[] }>();
 
     for (const route of this.routeQueue) {
       const controllerName = route.controllerName || 'Unknown';
@@ -783,7 +776,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         });
       }
 
-      groups.get(controllerName)!.routes.push({
+      groups.get(controllerName).routes.push({
         method: route.method.toUpperCase(),
         path: route.path,
       });
@@ -810,8 +803,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * // }
    * ```
    */
-  private groupWebSocketRoutesByController(): Map<string, { basePath: string; routes: Array<{ path: string }> }> {
-    const groups = new Map<string, { basePath: string; routes: Array<{ path: string }> }>();
+  private groupWebSocketRoutesByController(): Map<string, { basePath: string; routes: { path: string }[] }> {
+    const groups = new Map<string, { basePath: string; routes: { path: string }[] }>();
 
     for (const wsRoute of this.wsRouteQueue) {
       const controllerName = wsRoute.controllerName || 'Unknown';
@@ -824,7 +817,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         });
       }
 
-      groups.get(controllerName)!.routes.push({
+      groups.get(controllerName).routes.push({
         path: wsRoute.path,
       });
     }
@@ -862,7 +855,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const [controllerName, wsGroup] of wsGroups) {
       if (httpGroups.has(controllerName)) {
         // Add WebSocket routes to existing controller group
-        const httpGroup = httpGroups.get(controllerName)!;
+        const httpGroup = httpGroups.get(controllerName);
 
         for (const wsRoute of wsGroup.routes) {
           httpGroup.routes.push({
@@ -924,5 +917,4 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     return lines.join('\n');
   }
-
 }
