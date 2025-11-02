@@ -48,7 +48,6 @@
  */
 
 import { type Context, MiddlewareService } from '../defaults';
-import { HTTPException } from 'hono/http-exception';
 
 /**
  * Token bucket for a single client
@@ -374,16 +373,14 @@ export class RateLimiterMiddleware extends MiddlewareService {
       // Rate limit exceeded
       const retryAfter = Math.ceil((requestCost - bucket.tokens) / this.refillRate);
 
-      // @ts-ignore
-      throw new HTTPException(this.statusCode, {
-        res: new Response(this.message, {
-          headers: {
-            'Retry-After': String(retryAfter),
-            'X-RateLimit-Limit': String(Math.floor(this.refillRate * 60)), // Requests per minute
-            'X-RateLimit-Remaining': String(Math.floor(bucket.tokens)),
-            'X-RateLimit-Reset': String(Math.floor(bucket.lastRefill / 1000 + retryAfter)),
-          },
-        }),
+      return new Response(this.message, {
+        status: this.statusCode,
+        headers: {
+          'Retry-After': String(retryAfter),
+          'X-RateLimit-Limit': String(Math.floor(this.refillRate * 60)), // Requests per minute
+          'X-RateLimit-Remaining': String(Math.floor(bucket.tokens)),
+          'X-RateLimit-Reset': String(Math.floor(bucket.lastRefill / 1000 + retryAfter)),
+        },
       });
     }
 

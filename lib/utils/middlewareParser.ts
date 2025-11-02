@@ -38,6 +38,12 @@ export const middlewareParser = (middlewares: BaseMiddleware<HonoAdapterContext>
           return;
         }
 
+        // If middleware returns Response, return it to Hono
+        // This allows middleware to short-circuit the chain (like Hono's built-in CORS)
+        if (result instanceof Response) {
+          return result;
+        }
+
         // If middleware didn't call next(), we call it here
         // Note: Hono middleware should handle next() calls properly
       } catch (error) {
