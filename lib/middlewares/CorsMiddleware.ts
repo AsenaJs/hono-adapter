@@ -11,7 +11,7 @@
  *
  * @example
  * ```typescript
- * import { Middleware } from '@asenajs/asena/server';
+ * import { Middleware } from '@asenajs/asena/decorators';
  * import { CorsMiddleware } from '@asenajs/hono-adapter';
  *
  * @Middleware()
@@ -172,17 +172,15 @@ export class CorsMiddleware extends MiddlewareService {
       return new Response('CORS: Origin not allowed', { status: 403 });
     }
 
-    // Set CORS headers using Hono's context (access via context.context for HonoContextWrapper)
-    const honoContext = (context as any).context;
-
-    honoContext.header('Access-Control-Allow-Origin', allowedOrigin);
+    // Set CORS headers via AsenaContext abstraction
+    context.setResponseHeader('Access-Control-Allow-Origin', allowedOrigin);
 
     if (this.credentials) {
-      honoContext.header('Access-Control-Allow-Credentials', 'true');
+      context.setResponseHeader('Access-Control-Allow-Credentials', 'true');
     }
 
     if (this.exposedHeaders) {
-      honoContext.header('Access-Control-Expose-Headers', this.exposedHeaders);
+      context.setResponseHeader('Access-Control-Expose-Headers', this.exposedHeaders);
     }
 
     // Handle preflight OPTIONS request

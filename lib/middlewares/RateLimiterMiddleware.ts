@@ -12,7 +12,7 @@
  *
  * **Usage in Asena Application:**
  * ```typescript
- * import { Middleware } from '@asenajs/asena/server';
+ * import { Middleware } from '@asenajs/asena/decorators';
  * import { RateLimiterMiddleware } from '@asenajs/hono-adapter';
  *
  * // Create custom rate limiter for your needs
@@ -386,12 +386,10 @@ export class RateLimiterMiddleware extends MiddlewareService {
     // Consume tokens
     bucket.tokens -= requestCost;
 
-    // Set rate limit headers using Hono's context
-    const honoContext = (context as any).context;
-
-    honoContext.header('X-RateLimit-Limit', String(Math.floor(this.refillRate * 60)));
-    honoContext.header('X-RateLimit-Remaining', String(Math.floor(bucket.tokens)));
-    honoContext.header('X-RateLimit-Reset', String(Math.floor(bucket.lastRefill / 1000 + 60)));
+    // Set rate limit headers via AsenaContext abstraction
+    context.setResponseHeader('X-RateLimit-Limit', String(Math.floor(this.refillRate * 60)));
+    context.setResponseHeader('X-RateLimit-Remaining', String(Math.floor(bucket.tokens)));
+    context.setResponseHeader('X-RateLimit-Reset', String(Math.floor(bucket.lastRefill / 1000 + 60)));
 
     // Continue to next middleware/handler
     return await next();
@@ -432,7 +430,11 @@ export class RateLimiterMiddleware extends MiddlewareService {
    * @returns Client identifier
    */
   private defaultKeyGenerator(context: Context): string {
-    return context.req.header('x-forwarded-for') || context.req.header('cf-connecting-ip') || 'unknown';
+    const req = context.req as any;
+    const forwarded = typeof req.header === 'function' ? req.header('x-forwarded-for') : context.headers?.['x-forwarded-for'];
+    const cfIp = typeof req.header === 'function' ? req.header('cf-connecting-ip') : context.headers?.['cf-connecting-ip'];
+
+    return forwarded || cfIp || context.getRequestIp?.() || 'unknown';
   }
 
   /**
