@@ -44,8 +44,8 @@ await new AsenaServer(adapter)
 ### Controller Example
 
 ```typescript
-import { Controller } from '@asenajs/asena/server';
-import { Get } from '@asenajs/asena/web';
+import { Controller } from '@asenajs/asena/decorators';
+import { Get } from '@asenajs/asena/decorators/http';
 import type { Context } from '@asenajs/hono-adapter';
 
 @Controller()

@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { Server } from 'bun';
 import * as bun from 'bun';
 import { HonoContextWrapper } from './HonoContextWrapper';
-import type { AsenaWebsocketAdapter, BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
+import type { BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
   AsenaAdapter,
   type AsenaServeOptions,
@@ -14,13 +14,14 @@ import {
   type ValidatorHandler,
 } from '@asenajs/asena/adapter';
 import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asenajs/asena/server/config';
-import { shouldApplyMiddleware } from '@asenajs/asena/utlis';
-import type { HonoErrorHandler, HonoHandler, StaticServeExtras } from './types';
+import { shouldApplyMiddleware } from '@asenajs/asena/utils';
+import type { HonoAdapterOptions, HonoErrorHandler, HonoHandler, StaticServeExtras } from './types';
 import { blue, green, red, type ServerLogger, yellow } from '@asenajs/asena/logger';
 import { type Hook, zValidator } from '@hono/zod-validator';
 import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
-import type { ZodError, ZodType, ZodTypeDef } from 'zod';
+import type { ZodError, ZodType } from 'zod';
 import { middlewareParser } from './utils/middlewareParser';
+import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
 import { HonoWebsocketAdapter } from './HonoWebsocketAdapter';
@@ -30,11 +31,33 @@ import { serveStatic } from 'hono/bun';
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
 
-  public app = new Hono();
+  public app: Hono;
+
+  private _strict: boolean = true;
 
   private server: Server<WebSocketData>;
 
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
+
+  /**
+   * Normalizes a route path for Hono compatibility.
+   * Strips trailing slash (except root '/') because Hono's strict:false
+   * normalizes incoming request paths by removing trailing slashes.
+   * Registered routes must match this normalized form.
+   */
+  private normalizePath(path: string): string {
+    if (path.length > 1 && path.endsWith('/')) {
+      return path.slice(0, -1);
+    }
+
+    return path;
+  }
+
+  public async stop(closeActiveConnections = true): Promise<void> {
+    if (this.server) {
+      this.server.stop(closeActiveConnections);
+    }
+  }
 
   // Deferred route registration
   private routeQueue: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[] = [];
@@ -54,32 +77,67 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     config?: GlobalMiddlewareConfig['routes'];
   }[] = [];
 
+  /**
+   * HTML routes for FrontendController pages
+   * Stored separately and merged into Bun.serve() routes at start time
+   */
+  private htmlRoutes = new Map<string, unknown>();
+
   private routesRegistered = false;
 
   private readonly methodMap = {
-    [HttpMethod.GET]: (path: string, ...handlers: (MiddlewareHandler | Handler)[]) => this.app.get(path, ...handlers),
-    [HttpMethod.POST]: (path: string, ...handlers: any[]) => this.app.post(path, ...handlers),
-    [HttpMethod.PUT]: (path: string, ...handlers: any[]) => this.app.put(path, ...handlers),
-    [HttpMethod.DELETE]: (path: string, ...handlers: any[]) => this.app.delete(path, ...handlers),
-    [HttpMethod.PATCH]: (path: string, ...handlers: any[]) => this.app.patch(path, ...handlers),
-    [HttpMethod.OPTIONS]: (path: string, ...handlers: any[]) => this.app.options(path, ...handlers),
+    [HttpMethod.GET]: (path: string, ...handlers: any[]) => (this.app as any).get(path, ...handlers),
+    [HttpMethod.POST]: (path: string, ...handlers: any[]) => (this.app as any).post(path, ...handlers),
+    [HttpMethod.PUT]: (path: string, ...handlers: any[]) => (this.app as any).put(path, ...handlers),
+    [HttpMethod.DELETE]: (path: string, ...handlers: any[]) => (this.app as any).delete(path, ...handlers),
+    [HttpMethod.PATCH]: (path: string, ...handlers: any[]) => (this.app as any).patch(path, ...handlers),
+    [HttpMethod.OPTIONS]: (path: string, ...handlers: any[]) => (this.app as any).options(path, ...handlers),
     [HttpMethod.CONNECT]: (path: string, ...handlers: any[]) =>
-      this.app.on(HttpMethod.CONNECT.toUpperCase(), path, ...handlers),
-    [HttpMethod.HEAD]: (path: string, ...handlers: any[]) =>
-      this.app.on(HttpMethod.HEAD.toUpperCase(), path, ...handlers),
+      (this.app as any).on([HttpMethod.CONNECT.toUpperCase()], path, ...handlers),
+    // HEAD is handled automatically by Hono via GET routes (HTTP spec: HEAD = GET without body).
+    // Registering via app.on(['HEAD'], ...) does not work in Hono — it silently 404s.
+    [HttpMethod.HEAD]: (path: string, ...handlers: any[]) => (this.app as any).get(path, ...handlers),
     [HttpMethod.TRACE]: (path: string, ...handlers: any[]) =>
-      this.app.on(HttpMethod.TRACE.toUpperCase(), path, ...handlers),
+      (this.app as any).on([HttpMethod.TRACE.toUpperCase()], path, ...handlers),
+    [HttpMethod.ALL]: (path: string, ...handlers: any[]) => (this.app as any).all(path, ...handlers),
   };
 
-  public constructor(logger: ServerLogger, websocketAdapter?: AsenaWebsocketAdapter) {
-    super(logger, websocketAdapter);
-    if (!this.websocketAdapter) {
-      this.websocketAdapter = new HonoWebsocketAdapter(logger);
+  public constructor(options: HonoAdapterOptions);
+  public constructor(logger: ServerLogger, websocketAdapter?: HonoWebsocketAdapter, app?: Hono<any, any, any>);
+  public constructor(
+    loggerOrOptions: ServerLogger | HonoAdapterOptions,
+    websocketAdapter?: HonoWebsocketAdapter,
+    app?: Hono<any, any, any>,
+  ) {
+    let logger: ServerLogger;
+    let wsAdapter: HonoWebsocketAdapter;
+    let honoApp: Hono<any, any, any> | undefined;
+
+    if (typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions) {
+      logger = loggerOrOptions.logger;
+      wsAdapter = loggerOrOptions.websocketAdapter ?? new HonoWebsocketAdapter(logger);
+      honoApp = loggerOrOptions.app;
+    } else {
+      logger = loggerOrOptions;
+      wsAdapter = websocketAdapter ?? new HonoWebsocketAdapter(logger);
+      honoApp = app;
     }
 
-    // to ensure that the logger is set
+    super(logger, wsAdapter);
+
     if (!this.websocketAdapter.logger && logger) {
       this.websocketAdapter.logger = this.logger;
+    }
+
+    this._strict = typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions
+      ? loggerOrOptions.strict ?? true
+      : true;
+
+
+    if (honoApp) {
+      this.app = honoApp;
+    } else {
+      this.app = new Hono({ strict: this._strict });
     }
   }
 
@@ -109,6 +167,28 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * });
    * ```
    */
+  /**
+   * Registers an HTML route for FrontendController pages.
+   * HTML routes bypass the middleware chain and are served directly by Bun.serve().
+   *
+   * @param path - Full URL path (e.g., '/ui/home')
+   * @param htmlBundle - The HTML bundle returned by importing an .html file
+   */
+  public registerHTMLRoute(path: string, htmlBundle: unknown): void {
+    if (this.htmlRoutes.has(path)) {
+      throw new Error(`Duplicate HTML route: "${path}" is already registered.`);
+    }
+
+    this.htmlRoutes.set(path, htmlBundle);
+
+    // Register trailing slash variant for consistent routing
+    if (path !== '/' && !path.endsWith('/')) {
+      this.htmlRoutes.set(`${path}/`, htmlBundle);
+    } else if (path !== '/' && path.endsWith('/')) {
+      this.htmlRoutes.set(path.slice(0, -1), htmlBundle);
+    }
+  }
+
   public use(middleware: BaseMiddleware<HonoAdapterContext>, config?: GlobalMiddlewareRouteConfig) {
     // Store middleware with config for deferred application during route registration
     this.globalMiddlewares.push({ middleware, config });
@@ -140,18 +220,31 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   public async start() {
     // Register all queued routes with optimization
     if (!this.routesRegistered) {
+      // Register global middlewares at top level BEFORE routes
+      // This ensures they run for ALL requests including OPTIONS preflight
+      this.registerGlobalMiddlewaresTopLevel();
+
       await this.optimizeAndRegisterRoutes();
       this.routesRegistered = true;
     }
 
     this.websocketAdapter.prepareWebSocket(this.options?.wsOptions);
 
-    this.server = bun.serve({
+    const serveConfig: any = {
       ...this.options.serveOptions,
       port: this.port,
       fetch: this.app.fetch,
       websocket: this.websocketAdapter.websocket,
-    } as any);
+    };
+
+    // Add HTML routes if any are registered (FrontendController pages)
+    // Bun checks routes first, then falls through to fetch (Hono) for API routes
+    if (this.htmlRoutes.size > 0) {
+      serveConfig.routes = Object.fromEntries(this.htmlRoutes);
+    }
+
+
+    this.server = bun.serve(serveConfig);
 
     this.websocketAdapter.startWebsocket(this.server);
 
@@ -202,7 +295,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       });
 
       // Wrap context for user handler
-      const wrapper = new HonoContextWrapper(context);
+      const wrapper = new HonoContextWrapper(context, this.server);
 
       // Handle HTTPException with Hono's standard pattern
       if (error instanceof HTTPException) {
@@ -251,11 +344,11 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   private prepareMiddlewares(middlewares: BaseMiddleware<HonoAdapterContext>[]): MiddlewareHandler[] {
-    return middlewareParser(middlewares);
+    return middlewareParser(middlewares, () => this.server);
   }
 
   private prepareHandler(handler: HonoHandler): Handler {
-    return (c: Context) => handler(new HonoContextWrapper(c));
+    return (c: Context) => handler(new HonoContextWrapper(c, this.server));
   }
 
   /**
@@ -301,7 +394,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           }
 
           // Call user callback
-          await staticServe.onFound.handler(path, new HonoContextWrapper(c));
+          await staticServe.onFound.handler(path, new HonoContextWrapper(c, this.server));
         };
       }
     } else if (staticServe.extra?.cacheControl || staticServe.extra?.headers) {
@@ -326,7 +419,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         staticServeOptions.onNotFound = staticServe.onNotFound.handler;
       } else {
         staticServeOptions.onNotFound = (path, c: Context) => {
-          staticServe.onNotFound.handler(path, new HonoContextWrapper(c));
+          staticServe.onNotFound.handler(path, new HonoContextWrapper(c, this.server));
         };
       }
     }
@@ -371,7 +464,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           continue;
         }
 
-        let schema: ZodType<any, ZodTypeDef, any>;
+        let schema: ZodType<any, any, any>;
         let hook: Hook<any, any, any> | undefined;
 
         if (typeof validationSchema === 'object' && 'schema' in validationSchema) {
@@ -383,7 +476,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
             throw new Error(`Invalid Zod schema provided for '${key}' validator`);
           }
         } else {
-          schema = validationSchema as ZodType<any, ZodTypeDef, any>;
+          schema = validationSchema as ZodType<never, never, never>;
 
           if (!schema || typeof schema.parse !== 'function') {
             throw new Error(`Invalid Zod schema provided for '${key}' validator`);
@@ -427,6 +520,51 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     }
 
     return validators;
+  }
+
+  /**
+   * Registers global middlewares at the top level of the Hono app
+   *
+   * Must be called BEFORE route registration so middlewares run before route matching.
+   * This ensures global middlewares (like CORS) handle all requests including
+   * OPTIONS preflight requests that don't have explicit route handlers.
+   *
+   * Uses Hono's native path-based middleware registration:
+   * - No config → app.use('*', mw)
+   * - Only include patterns → app.use('/api/*', mw) per pattern
+   * - Exclude patterns → runtime shouldApplyMiddleware check (Hono has no native exclude)
+   */
+  private registerGlobalMiddlewaresTopLevel(): void {
+    for (const { middleware, config } of this.globalMiddlewares) {
+      const parsed = middlewareParser([middleware], () => this.server);
+
+      if (!config) {
+        // No pattern filter → apply to all routes
+        this.app.use('*', ...parsed);
+      } else if (config.include && !config.exclude) {
+        // Only include patterns → use Hono's native path matching
+        for (const pattern of config.include) {
+          this.app.use(pattern, ...parsed);
+        }
+      } else {
+        // Exclude patterns exist → runtime filtering required
+        this.app.use('*', async (c, next) => {
+          if (shouldApplyMiddleware(new URL(c.req.url).pathname, config)) {
+            for (const mw of parsed) {
+              let called = false;
+
+              await mw(c, async () => {
+                called = true;
+              });
+
+              if (!called) return;
+            }
+          }
+
+          await next();
+        });
+      }
+    }
   }
 
   /**
@@ -537,10 +675,19 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   private async optimizeAndRegisterRoutes(): Promise<void> {
     // Register HTTP routes
     if (this.routeQueue.length > 0) {
+      // Sort routes by priority: static > param > wildcard, more specific first.
+      // Hono matches in registration order — correct ordering prevents /:id
+      // from catching static routes like /count or /search.
+      // @see routePriority.ts for the segment-based comparison algorithm.
+      this.routeQueue.sort((a, b) => compareRoutePriority(a.path, b.path));
+
       // Group routes by base path
       const routeGroups = this.groupRoutesByBasePath(this.routeQueue);
 
-      for (const [basePath, routes] of routeGroups) {
+      // Sort groups by the same priority algorithm to ensure correct inter-group order
+      const sortedGroups = [...routeGroups.entries()].sort(([a], [b]) => compareRoutePriority(a, b));
+
+      for (const [basePath, routes] of sortedGroups) {
         // Find common middlewares for this group
         const commonMiddlewares = this.extractCommonMiddlewares(routes);
 
@@ -611,7 +758,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // Combine: global middlewares -> route middlewares
     const allMiddlewares = [...preparedGlobalMiddlewares, ...preparedMiddlewares];
 
-    this.app.get(`/${wsRoute.path}`, ...allMiddlewares, async (c: Context, next) => {
+    (this.app as any).get(`/${wsRoute.path}`, ...allMiddlewares, async (c: Context, next) => {
       const websocketData = c.get('_websocketData') || {};
 
       const id = bun.randomUUIDv7();
@@ -636,16 +783,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     routes: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[],
   ): Promise<void> {
     // Create grouped Hono instance
-    const group = new Hono();
 
-    // Get filtered global middlewares for this base path
-    const applicableGlobalMiddlewares = this.getGlobalMiddlewaresForPath(basePath);
-    const preparedGlobalMiddlewares = this.prepareMiddlewares(applicableGlobalMiddlewares);
+    const group = new Hono({ strict: this._strict });
 
-    // Apply global middlewares first (before common middlewares)
-    if (preparedGlobalMiddlewares.length > 0) {
-      group.use('*', ...preparedGlobalMiddlewares);
-    }
+    // Global middlewares are registered at top level via registerGlobalMiddlewaresTopLevel()
 
     // Apply common middlewares to the entire group
     const preparedCommonMiddlewares = this.prepareMiddlewares(commonMiddlewares);
@@ -656,18 +797,18 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     // Method map for group
     const groupMethodMap = {
-      [HttpMethod.GET]: (path: string, ...handlers: (MiddlewareHandler | Handler)[]) => group.get(path, ...handlers),
-      [HttpMethod.POST]: (path: string, ...handlers: any[]) => group.post(path, ...handlers),
-      [HttpMethod.PUT]: (path: string, ...handlers: any[]) => group.put(path, ...handlers),
-      [HttpMethod.DELETE]: (path: string, ...handlers: any[]) => group.delete(path, ...handlers),
-      [HttpMethod.PATCH]: (path: string, ...handlers: any[]) => group.patch(path, ...handlers),
-      [HttpMethod.OPTIONS]: (path: string, ...handlers: any[]) => group.options(path, ...handlers),
+      [HttpMethod.GET]: (path: string, ...handlers: any[]) => (group as any).get(path, ...handlers),
+      [HttpMethod.POST]: (path: string, ...handlers: any[]) => (group as any).post(path, ...handlers),
+      [HttpMethod.PUT]: (path: string, ...handlers: any[]) => (group as any).put(path, ...handlers),
+      [HttpMethod.DELETE]: (path: string, ...handlers: any[]) => (group as any).delete(path, ...handlers),
+      [HttpMethod.PATCH]: (path: string, ...handlers: any[]) => (group as any).patch(path, ...handlers),
+      [HttpMethod.OPTIONS]: (path: string, ...handlers: any[]) => (group as any).options(path, ...handlers),
       [HttpMethod.CONNECT]: (path: string, ...handlers: any[]) =>
-        group.on(HttpMethod.CONNECT.toUpperCase(), path, ...handlers),
-      [HttpMethod.HEAD]: (path: string, ...handlers: any[]) =>
-        group.on(HttpMethod.HEAD.toUpperCase(), path, ...handlers),
+        (group as any).on([HttpMethod.CONNECT.toUpperCase()], path, ...handlers),
+      // HEAD is handled automatically by Hono via GET routes (HTTP spec: HEAD = GET without body).
+      [HttpMethod.HEAD]: (path: string, ...handlers: any[]) => (group as any).get(path, ...handlers),
       [HttpMethod.TRACE]: (path: string, ...handlers: any[]) =>
-        group.on(HttpMethod.TRACE.toUpperCase(), path, ...handlers),
+        (group as any).on([HttpMethod.TRACE.toUpperCase()], path, ...handlers),
     };
 
     // Register each route in the group
@@ -681,11 +822,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       const validators = route.validator ? await this.prepareValidator(route.validator) : [];
       const allMiddlewares = [...validators, ...preparedMiddlewares];
 
-      const methodHandler = groupMethodMap[route.method];
+      const methodHandler =
+        groupMethodMap[route.method] ??
+        ((path: string, ...handlers: any[]) => (group as any).on([route.method.toUpperCase()], path, ...handlers));
 
-      if (!methodHandler) {
-        throw new Error(`Invalid HTTP method: ${route.method}`);
-      }
 
       // Calculate relative path
       let relativePath = route.path;
@@ -698,18 +838,21 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         relativePath = '/' + relativePath;
       }
 
+      // Normalize path for Hono trailing slash compatibility
+      const normalizedRelativePath = this.normalizePath(relativePath);
+
       // Register to group
       if (route.staticServe) {
-        methodHandler(relativePath, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(route.staticServe)));
+        methodHandler(normalizedRelativePath, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(route.staticServe)));
       } else {
         const handler = this.prepareHandler(route.handler);
 
-        methodHandler(relativePath, ...allMiddlewares, handler);
+        methodHandler(normalizedRelativePath, ...allMiddlewares, handler);
       }
     }
 
-    // Mount group to main app
-    this.app.route(basePath, group);
+    // Mount group to main app (normalize basePath too)
+    this.app.route(this.normalizePath(basePath), group);
   }
 
   /**
@@ -718,28 +861,29 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   private async registerRouteDirect(
     route: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
   ): Promise<void> {
-    // Get filtered global middlewares for this route
-    const applicableGlobalMiddlewares = this.getGlobalMiddlewaresForPath(route.path);
-    const preparedGlobalMiddlewares = this.prepareMiddlewares(applicableGlobalMiddlewares);
 
     const preparedMiddlewares = this.prepareMiddlewares(route.middlewares || []);
     const validators = route.validator ? await this.prepareValidator(route.validator) : [];
 
-    // Combine: validators -> global middlewares -> route middlewares
-    const allMiddlewares = [...validators, ...preparedGlobalMiddlewares, ...preparedMiddlewares];
+    // Global middlewares are registered at top level via registerGlobalMiddlewaresTopLevel()
+    const allMiddlewares = [...validators, ...preparedMiddlewares];
 
-    const methodHandler = this.methodMap[route.method];
+    const methodHandler =
+      this.methodMap[route.method] ??
+      ((path: string, ...handlers: any[]) => (this.app as any).on([route.method.toUpperCase()], path, ...handlers));
 
-    if (!methodHandler) {
-      throw new Error(`Invalid HTTP method: ${route.method}`);
-    }
+
+    // Normalize path for Hono: strip trailing slash (except root '/')
+    // Hono strict:false strips trailing slash from incoming requests,
+    // so registered paths must also not have trailing slash to match.
+    const normalizedPath = this.normalizePath(route.path);
 
     if (route.staticServe) {
-      methodHandler(route.path, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(route.staticServe)));
+      methodHandler(normalizedPath, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(route.staticServe)));
     } else {
       const handler = this.prepareHandler(route.handler);
 
-      methodHandler(route.path, ...allMiddlewares, handler);
+      methodHandler(normalizedPath, ...allMiddlewares, handler);
     }
   }
 

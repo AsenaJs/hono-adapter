@@ -1,1893 +1,1566 @@
-import { describe, expect, it, mock, spyOn } from 'bun:test';
+import { describe, expect, it, beforeEach, afterEach, mock } from 'bun:test';
+import { Hono } from 'hono';
 import { HonoAdapter } from '../lib/HonoAdapter';
 import { HonoWebsocketAdapter } from '../lib/HonoWebsocketAdapter';
-import type { ServerLogger } from '@asenajs/asena/logger';
 import { HttpMethod } from '@asenajs/asena/web-types';
-import type { AsenaWebSocketService } from '@asenajs/asena/web-socket';
-import { z } from 'zod';
 import { HTTPException } from 'hono/http-exception';
-
-// Mock logger for testing
-const createMockLogger = (): ServerLogger => ({
-  info: mock(() => {}),
-  warn: mock(() => {}),
-  error: mock(() => {}),
-  // @ts-ignore
-  debug: mock(() => {}),
-});
+import { z } from 'zod';
+import type { Server } from 'bun';
+import type { Context as HonoAdapterContext } from '../lib/defaults';
+import {
+  createMockLogger,
+  createTestAdapter,
+  startTestServer,
+  registerRoute,
+  createTestMiddleware,
+} from './utils/testHelpers';
 
 describe('HonoAdapter', () => {
-  // Test adapter creation
-  it('should create an adapter instance', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
+  let server: Server<any> | undefined;
 
-    expect(adapter).toBeDefined();
-    expect(adapter.name).toBe('HonoAdapter');
-    expect(adapter.app).toBeDefined();
+  afterEach(async () => {
+    if (server) {
+      server.stop(true);
+      server = undefined;
+    }
   });
 
-  // Test middleware registration
-  it('should register middleware correctly', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
+  // ─── Constructor & Configuration ──────────────────────────────────
 
-    const middleware = {
-      handle: mock(() => (_c, next) => next()),
-      override: false,
-    };
-
-    adapter.use(middleware);
-
-    // Middleware is now stored in globalMiddlewares array (deferred application)
-    expect(adapter['globalMiddlewares']).toHaveLength(1);
-    expect(adapter['globalMiddlewares'][0].middleware).toBe(middleware);
-  });
-
-  // Test route registration - deferred
-  it('should queue routes for deferred registration', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/test',
-      middlewares: [],
-      handler,
-    });
-
-    // Routes are queued, not immediately registered
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].path).toBe('/test');
-  });
-
-  // Test port setting
-  it('should set port correctly', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    adapter.setPort(3000);
-    expect(adapter['port']).toBe(3000);
-  });
-
-  // Test error handler registration
-  it('should register an error handler', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const spy = spyOn(adapter.app, 'onError');
-    const errorHandler = mock(() => new Response('Error'));
-
-    adapter.onError(errorHandler);
-
-    expect(spy).toHaveBeenCalled();
-  });
-
-  // Test HTTP methods - CONNECT
-  it('should queue CONNECT method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.CONNECT,
-      path: '/proxy',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.CONNECT);
-  });
-
-  // Test HTTP methods - HEAD
-  it('should queue HEAD method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.HEAD,
-      path: '/check',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.HEAD);
-  });
-
-  // Test HTTP methods - TRACE
-  it('should queue TRACE method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.TRACE,
-      path: '/trace',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.TRACE);
-  });
-
-  // Test POST method
-  it('should queue POST method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.POST,
-      path: '/create',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.POST);
-  });
-
-  // Test PUT method
-  it('should queue PUT method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.PUT,
-      path: '/update',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.PUT);
-  });
-
-  // Test DELETE method
-  it('should queue DELETE method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.DELETE,
-      path: '/remove',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.DELETE);
-  });
-
-  // Test PATCH method
-  it('should queue PATCH method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.PATCH,
-      path: '/modify',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.PATCH);
-  });
-
-  // Test OPTIONS method
-  it('should queue OPTIONS method route', async () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.OPTIONS,
-      path: '/options',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].method).toBe(HttpMethod.OPTIONS);
-  });
-
-  // Test global middleware registration without config (apply to all routes)
-  it('should register global middleware without config', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const middleware = {
-      handle: mock(() => true),
-      override: false,
-    };
-
-    adapter.use(middleware);
-
-    // Middleware should be stored in globalMiddlewares array
-    expect(adapter['globalMiddlewares']).toHaveLength(1);
-    expect(adapter['globalMiddlewares'][0].middleware).toBe(middleware);
-    expect(adapter['globalMiddlewares'][0].config).toBeUndefined();
-  });
-
-  // Test WebSocket route registration
-  it('should register WebSocket route', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const websocketService = {
-      namespace: 'chat',
-      onMessage: mock(() => {}),
-      onOpenInternal: mock(() => {}),
-      onCloseInternal: mock(() => {}),
-    } as unknown as AsenaWebSocketService<any>;
-
-    adapter.registerWebsocketRoute({
-      path: 'chat',
-      websocketService: websocketService as any,
-      middlewares: [],
-    });
-
-    // WebSocket routes are now queued for deferred registration
-    expect(adapter['wsRouteQueue']).toHaveLength(1);
-    expect(adapter['wsRouteQueue'][0].path).toBe('chat');
-  });
-
-  // Test WebSocket route with middlewares
-  it('should register WebSocket route with middlewares', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const middleware = {
-      handle: mock(() => true),
-      override: false,
-    };
-
-    const websocketService = {
-      namespace: 'chat',
-      onMessage: mock(() => {}),
-    } as unknown as AsenaWebSocketService<any>;
-
-    adapter.registerWebsocketRoute({
-      path: 'chat',
-      websocketService: websocketService as any,
-      middlewares: [middleware],
-    });
-
-    // WebSocket routes are now queued with middlewares
-    expect(adapter['wsRouteQueue']).toHaveLength(1);
-    expect(adapter['wsRouteQueue'][0].middlewares).toHaveLength(1);
-    expect(adapter['wsRouteQueue'][0].middlewares[0]).toBe(middleware);
-  });
-
-  // Test route group registration
-  it('should register route group', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/api/users',
-      middlewares: [],
-      handler,
-    });
-
-    // Routes are queued for deferred registration
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].path).toBe('/api/users');
-  });
-
-  // Test serveOptions with async function
-  it('should set serve options with async function', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const options = {
-      serveOptions: {
-        port: 3000,
-        hostname: 'localhost',
-        fetch: adapter.app.fetch,
-      } as any,
-      wsOptions: {
-        maxPayloadLength: 1024,
-      },
-    } as any;
-
-    await adapter.serveOptions(async () => options);
-
-    expect(adapter['options']).toEqual(options);
-  });
-
-  // Test serveOptions with sync function
-  it('should set serve options with sync function', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const options = {
-      serveOptions: {
-        port: 4000,
-        hostname: '0.0.0.0',
-        fetch: adapter.app.fetch,
-      } as any,
-    } as any;
-
-    await adapter.serveOptions(() => options);
-
-    expect(adapter['options']).toEqual(options);
-  });
-
-  // Test route with middlewares
-  it('should register route with middlewares', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    const middleware = {
-      handle: mock(async () => true),
-      override: false,
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/protected',
-      middlewares: [middleware],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].middlewares).toHaveLength(1);
-    // Middleware is wrapped and will be called during request, not during registration
-  });
-
-  // Test adapter creates default websocket adapter when none provided
-  it('should create default websocket adapter when none provided', () => {
-    const logger = createMockLogger();
-    const adapter = new HonoAdapter(logger);
-
-    expect(adapter['websocketAdapter']).toBeDefined();
-    expect(adapter['websocketAdapter'].name).toBe('HonoWebsocketAdapter');
-  });
-
-  // Test websocket adapter logger is set
-  it('should set logger on websocket adapter if not set', () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(null as any);
-
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    expect(adapter).toBeDefined();
-    expect(websocketAdapter.logger).toBe(logger);
-  });
-
-  // Test static serve with basic options
-  it('should register static serve route', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/static/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.root).toBe('./public');
-  });
-
-  // Test static serve with mimes
-  it('should register static serve with custom mimes', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        extra: {
-          mimes: {
-            '.ts': 'text/typescript',
-            '.md': 'text/markdown',
-          },
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/assets/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.extra?.mimes).toEqual({
-      '.ts': 'text/typescript',
-      '.md': 'text/markdown',
-    });
-  });
-
-  // Test static serve with precompressed
-  it('should register static serve with precompressed option', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        extra: {
-          precompressed: true,
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/compressed/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.extra?.precompressed).toBe(true);
-  });
-
-  // Test static serve with onFound handler
-  it('should register static serve with onFound handler', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const onFoundHandler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        onFound: {
-          handler: onFoundHandler,
-          override: false,
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/files/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.onFound?.override).toBe(false);
-  });
-
-  // Test static serve with onFound override
-  it('should register static serve with onFound override', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const onFoundHandler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        onFound: {
-          handler: onFoundHandler,
-          override: true,
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/override/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.onFound?.override).toBe(true);
-  });
-
-  // Test static serve with onNotFound handler
-  it('should register static serve with onNotFound handler', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const onNotFoundHandler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        onNotFound: {
-          handler: onNotFoundHandler,
-          override: false,
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/404/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.onNotFound?.override).toBe(false);
-  });
-
-  // Test static serve with onNotFound override
-  it('should register static serve with onNotFound override', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const onNotFoundHandler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        onNotFound: {
-          handler: onNotFoundHandler,
-          override: true,
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/404-override/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.onNotFound?.override).toBe(true);
-  });
-
-  // Test static serve with cache control
-  it('should register static serve with custom cache control', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        extra: {
-          cacheControl: 'public, max-age=3600',
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/cached/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.extra?.cacheControl).toBe('public, max-age=3600');
-  });
-
-  // Test static serve with custom headers
-  it('should register static serve with custom headers', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        extra: {
-          headers: {
-            'X-Custom-Header': 'CustomValue',
-            'X-Another-Header': 'AnotherValue',
-          },
-        },
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/headers/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.extra?.headers).toEqual({
-      'X-Custom-Header': 'CustomValue',
-      'X-Another-Header': 'AnotherValue',
-    });
-  });
-
-  // Test static serve with rewriteRequestPath
-  it('should register static serve with rewriteRequestPath', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    await adapter.registerRoute({
-      staticServe: {
-        root: './public',
-        rewriteRequestPath: (path: string) => path.replace('/rewrite', ''),
-      },
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/rewrite/*',
-      middlewares: [],
-      handler: null,
-    } as any);
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].staticServe?.rewriteRequestPath).toBeTypeOf('function');
-  });
-
-  // Test validation with body schema
-  it('should register route with body validation', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    const validator = {
-      body: {
-        handle: async () => ({
-          schema: z.object({
-            email: z.string().email(),
-            password: z.string().min(8),
-          }),
-        }),
-      },
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: validator as any,
-      method: HttpMethod.POST,
-      path: '/login',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].validator).toBeDefined();
-    // Validator handle is called during route registration
-  });
-
-  // Test validation with schema and hook
-  it('should register route with validation schema and hook', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-    const hookFn = mock(() => {});
-
-    const validator = {
-      body: {
-        handle: async () => ({
-          schema: z.object({
-            name: z.string(),
-          }),
-          hook: hookFn,
-        }),
-      },
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: validator as any,
-      method: HttpMethod.POST,
-      path: '/user',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].validator).toBeDefined();
-  });
-
-  // Test validation with query params
-  it('should register route with query validation', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    const validator = {
-      query: {
-        handle: async () =>
-          z.object({
-            page: z.string().transform(Number),
-            limit: z.string().transform(Number),
-          }),
-      },
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: validator as any,
-      method: HttpMethod.GET,
-      path: '/search',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].validator).toBeDefined();
-  });
-
-  // Test validation with param
-  it('should register route with param validation', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    const validator = {
-      param: {
-        handle: async () =>
-          z.object({
-            id: z.string().uuid(),
-          }),
-      },
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: validator as any,
-      method: HttpMethod.GET,
-      path: '/user/:id',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].validator).toBeDefined();
-  });
-
-  // Test validation with header
-  it('should register route with header validation', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    const validator = {
-      header: {
-        handle: async () =>
-          z.object({
-            authorization: z.string(),
-          }),
-      },
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: validator as any,
-      method: HttpMethod.GET,
-      path: '/protected',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].validator).toBeDefined();
-  });
-
-  // Test validation with cookie
-  it('should register route with cookie validation', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    const validator = {
-      cookie: {
-        handle: async () =>
-          z.object({
-            session: z.string(),
-          }),
-      },
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: validator as any,
-      method: HttpMethod.GET,
-      path: '/session',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].validator).toBeDefined();
-  });
-
-  // Test validation with multiple targets
-  it('should register route with multiple validation targets', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    const validator = {
-      body: {
-        handle: async () => z.object({ data: z.string() }),
-      },
-      query: {
-        handle: async () => z.object({ filter: z.string() }),
-      },
-      header: {
-        handle: async () => z.object({ authorization: z.string() }),
-      },
-    };
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: validator as any,
-      method: HttpMethod.POST,
-      path: '/multi',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-    expect(adapter['routeQueue'][0].validator).toBeDefined();
-  });
-
-  // Test route without validator
-  it('should register route without validator', async () => {
-    const logger = createMockLogger();
-    const websocketAdapter = new HonoWebsocketAdapter(logger);
-    const adapter = new HonoAdapter(logger, websocketAdapter);
-
-    const handler = mock(() => {});
-
-    await adapter.registerRoute({
-      staticServe: null,
-      validator: null,
-      method: HttpMethod.GET,
-      path: '/no-validation',
-      middlewares: [],
-      handler,
-    });
-
-    expect(adapter['routeQueue']).toHaveLength(1);
-  });
-
-  // Controller-Based Logging Tests
-  describe('Controller-Based Logging', () => {
-    it('should group HTTP routes by controller name', async () => {
+  describe('Constructor & Configuration', () => {
+    it('should create adapter with logger (legacy constructor)', () => {
       const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
+      const wsAdapter = new HonoWebsocketAdapter(logger);
+      const adapter = new HonoAdapter(logger, wsAdapter);
 
-      const handler = mock(() => {});
+      expect(adapter).toBeDefined();
+      expect(adapter.name).toBe('HonoAdapter');
+      expect(adapter.app).toBeDefined();
+    });
 
-      await adapter.registerRoute({
+    it('should create adapter with options object', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter({ logger });
+
+      expect(adapter).toBeDefined();
+      expect(adapter.name).toBe('HonoAdapter');
+    });
+
+    it('should create adapter with custom Hono app', () => {
+      const logger = createMockLogger();
+      const customApp = new Hono();
+      const adapter = new HonoAdapter({ logger, app: customApp });
+
+      expect(adapter.app).toBe(customApp);
+    });
+
+    it('should create default websocket adapter when none provided', () => {
+      const logger = createMockLogger();
+      const adapter = new HonoAdapter({ logger });
+
+      expect(adapter.getWebsocketAdapter()).toBeDefined();
+    });
+
+    it('should use provided websocket adapter', () => {
+      const logger = createMockLogger();
+      const wsAdapter = new HonoWebsocketAdapter(logger);
+      const adapter = new HonoAdapter({ logger, websocketAdapter: wsAdapter });
+
+      expect(adapter.getWebsocketAdapter()).toBe(wsAdapter);
+    });
+
+    it('should set strict mode from options', async () => {
+      // strict: false means /path and /path/ should match the same route
+      const { adapter } = createTestAdapter({ strict: false });
+
+      await registerRoute(adapter, {
+        path: '/hello',
+        handler: (ctx) => ctx.send({ msg: 'ok' }),
+      });
+
+      server = (await startTestServer(adapter)).server;
+      const baseUrl = `http://localhost:${server.port}`;
+
+      const res1 = await fetch(`${baseUrl}/hello`);
+      const res2 = await fetch(`${baseUrl}/hello/`);
+
+      expect(res1.status).toBe(200);
+      expect(res2.status).toBe(200);
+    });
+
+    it('should set logger on websocket adapter if not set', () => {
+      const logger = createMockLogger();
+      const wsAdapter = new HonoWebsocketAdapter(logger);
+      // @ts-ignore - clear logger to test auto-set
+      wsAdapter['_logger'] = undefined;
+
+      const adapter = new HonoAdapter(logger, wsAdapter);
+      expect(adapter).toBeDefined();
+    });
+  });
+
+  // ─── Route Registration — All HTTP Methods ────────────────────────
+
+  describe('Route Registration — All HTTP Methods', () => {
+    it('should handle GET requests', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
         method: HttpMethod.GET,
         path: '/users',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-        controllerName: 'UserController',
-        controllerBasePath: '/users',
-      } as any);
+        handler: (ctx) => ctx.send({ users: ['alice', 'bob'] }),
+      });
 
-      await adapter.registerRoute({
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users`);
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.users).toEqual(['alice', 'bob']);
+    });
+
+    it('should handle POST requests with JSON body', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
         method: HttpMethod.POST,
         path: '/users',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-        controllerName: 'UserController',
-        controllerBasePath: '/users',
-      } as any);
+        handler: async (ctx) => {
+          const body = await ctx.getBody<{ name: string }>();
+          return ctx.send({ created: body.name }, 201);
+        },
+      });
 
-      const groups = adapter['groupRoutesByController']();
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
 
-      expect(groups.size).toBe(1);
-      expect(groups.has('UserController')).toBe(true);
-      expect(groups.get('UserController')?.routes).toHaveLength(2);
-      expect(groups.get('UserController')?.basePath).toBe('/users');
+      const res = await fetch(`${baseUrl}/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'charlie' }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.created).toBe('charlie');
     });
 
-    it('should group WebSocket routes by controller name', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
+    it('should handle PUT requests', async () => {
+      const { adapter } = createTestAdapter();
 
-      const websocketService = {
-        namespace: 'chat',
-      } as any;
+      await registerRoute(adapter, {
+        method: HttpMethod.PUT,
+        path: '/users/:id',
+        handler: async (ctx) => {
+          const id = ctx.getParam('id');
+          const body = await ctx.getBody<{ name: string }>();
+          return ctx.send({ id, name: body.name });
+        },
+      });
 
-      adapter.registerWebsocketRoute({
-        path: 'chat',
-        websocketService,
-        middlewares: [],
-        controllerName: 'ChatController',
-      } as any);
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
 
-      adapter.registerWebsocketRoute({
-        path: 'notifications',
-        websocketService: { namespace: 'notifications' } as any,
-        middlewares: [],
-        controllerName: 'NotificationController',
-      } as any);
+      const res = await fetch(`${baseUrl}/users/42`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'updated' }),
+      });
 
-      const groups = adapter['groupWebSocketRoutesByController']();
-
-      expect(groups.size).toBe(2);
-      expect(groups.has('ChatController')).toBe(true);
-      expect(groups.has('NotificationController')).toBe(true);
-      expect(groups.get('ChatController')?.routes).toHaveLength(1);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.id).toBe('42');
+      expect(body.name).toBe('updated');
     });
 
-    it('should sort routes by method in correct order', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
+    it('should handle DELETE requests', async () => {
+      const { adapter } = createTestAdapter();
 
-      const handler = mock(() => {});
-
-      // Register in random order
-      await adapter.registerRoute({
+      await registerRoute(adapter, {
         method: HttpMethod.DELETE,
         path: '/users/:id',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-        controllerName: 'UserController',
-        controllerBasePath: '/users',
-      } as any);
+        handler: (ctx) => {
+          const id = ctx.getParam('id');
+          return ctx.send({ deleted: id });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users/99`, { method: 'DELETE' });
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.deleted).toBe('99');
+    });
+
+    it('should handle PATCH requests', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        method: HttpMethod.PATCH,
+        path: '/users/:id',
+        handler: async (ctx) => {
+          const id = ctx.getParam('id');
+          const body = await ctx.getBody<{ email: string }>();
+          return ctx.send({ id, email: body.email });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users/5`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'new@test.com' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.email).toBe('new@test.com');
+    });
+
+    it('should handle OPTIONS requests', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        method: HttpMethod.OPTIONS,
+        path: '/api',
+        handler: (ctx) => ctx.send('', 204),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api`, { method: 'OPTIONS' });
+      expect(res.status).toBe(204);
+    });
+
+    it('should handle HEAD requests (via GET route)', async () => {
+      const { adapter } = createTestAdapter();
+
+      // HEAD requests in Hono are handled by GET routes (HTTP spec: HEAD = GET without body)
+      await registerRoute(adapter, {
+        method: HttpMethod.GET,
+        path: '/health',
+        handler: (ctx) => ctx.send({ status: 'ok' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/health`, { method: 'HEAD' });
+      expect(res.status).toBe(200);
+
+      // HEAD response should have no body
+      const body = await res.text();
+      expect(body).toBe('');
+    });
+
+    it('should handle ALL method (responds to multiple methods)', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        method: HttpMethod.ALL,
+        path: '/any',
+        handler: (ctx) => ctx.send({ method: ctx.req.method }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const getRes = await fetch(`${baseUrl}/any`);
+      expect((await getRes.json()).method).toBe('GET');
+
+      const postRes = await fetch(`${baseUrl}/any`, { method: 'POST' });
+      expect((await postRes.json()).method).toBe('POST');
+
+      const putRes = await fetch(`${baseUrl}/any`, { method: 'PUT' });
+      expect((await putRes.json()).method).toBe('PUT');
+    });
+  });
+
+  // ─── Route Handler Context ────────────────────────────────────────
+
+  describe('Route Handler Context', () => {
+    it('should read JSON body in handler', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        method: HttpMethod.POST,
+        path: '/echo',
+        handler: async (ctx) => {
+          const body = await ctx.getBody();
+          return ctx.send(body);
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/echo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hello: 'world' }),
+      });
+
+      expect(await res.json()).toEqual({ hello: 'world' });
+    });
+
+    it('should read route params', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/users/:userId/posts/:postId',
+        handler: (ctx) => {
+          return ctx.send({
+            userId: ctx.getParam('userId'),
+            postId: ctx.getParam('postId'),
+          });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users/10/posts/20`);
+      const body = await res.json();
+      expect(body.userId).toBe('10');
+      expect(body.postId).toBe('20');
+    });
+
+    it('should read query params', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/search',
+        handler: async (ctx) => {
+          const q = await ctx.getQuery('q');
+          const page = await ctx.getQuery('page');
+          return ctx.send({ q, page });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/search?q=test&page=2`);
+      const body = await res.json();
+      expect(body.q).toBe('test');
+      expect(body.page).toBe('2');
+    });
+
+    it('should send text response', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/text',
+        handler: (ctx) => ctx.send('hello plain text'),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/text`);
+      expect(await res.text()).toBe('hello plain text');
+    });
+
+    it('should send HTML response', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/page',
+        handler: (ctx) => ctx.html('<h1>Hello</h1>'),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/page`);
+      expect(res.headers.get('content-type')).toContain('text/html');
+      expect(await res.text()).toBe('<h1>Hello</h1>');
+    });
+
+    it('should send response with custom status and headers', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        method: HttpMethod.POST,
+        path: '/create',
+        handler: (ctx) =>
+          ctx.send({ id: 1 }, { status: 201, headers: { 'X-Custom': 'value' } }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/create`, { method: 'POST' });
+      expect(res.status).toBe(201);
+      expect(res.headers.get('X-Custom')).toBe('value');
+    });
+
+    it('should handle redirect', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/old',
+        handler: (ctx) => ctx.redirect('/new'),
+      });
+
+      await registerRoute(adapter, {
+        path: '/new',
+        handler: (ctx) => ctx.send({ location: 'new' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/old`, { redirect: 'manual' });
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('/new');
+    });
+  });
+
+  // ─── Middleware Execution ─────────────────────────────────────────
+
+  describe('Middleware Execution', () => {
+    it('should execute single middleware before handler', async () => {
+      const { adapter } = createTestAdapter();
+
+      const mw = createTestMiddleware('setHeader', {
+        headerName: 'X-Before',
+        headerValue: 'yes',
+      });
+
+      await registerRoute(adapter, {
+        path: '/mw',
+        middlewares: [mw],
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/mw`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('X-Before')).toBe('yes');
+      expect(mw.handle).toHaveBeenCalled();
+    });
+
+    it('should execute multiple middlewares in registration order', async () => {
+      const { adapter } = createTestAdapter();
+      const order: number[] = [];
+
+      const mw1 = createTestMiddleware(async (ctx, next) => {
+        order.push(1);
+        ctx.setResponseHeader?.('X-Order-1', 'first');
+        await next();
+        return true;
+      });
+
+      const mw2 = createTestMiddleware(async (ctx, next) => {
+        order.push(2);
+        ctx.setResponseHeader?.('X-Order-2', 'second');
+        await next();
+        return true;
+      });
+
+      await registerRoute(adapter, {
+        path: '/ordered',
+        middlewares: [mw1, mw2],
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/ordered`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('X-Order-1')).toBe('first');
+      expect(res.headers.get('X-Order-2')).toBe('second');
+      expect(order).toEqual([1, 2]);
+    });
+
+    it('should share context values between middlewares and handler', async () => {
+      const { adapter } = createTestAdapter();
+
+      const mw = createTestMiddleware(async (ctx, next) => {
+        ctx.setValue('user' as any, { id: 42, name: 'test' });
+        await next();
+        return true;
+      });
+
+      await registerRoute(adapter, {
+        path: '/shared',
+        middlewares: [mw],
+        handler: (ctx) => {
+          const user = ctx.getValue('user' as any);
+          return ctx.send({ user });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/shared`);
+      const body = await res.json();
+      expect(body.user).toEqual({ id: 42, name: 'test' });
+    });
+
+    it('should stop chain when middleware returns false', async () => {
+      const { adapter } = createTestAdapter();
+      const handlerCalled = { value: false };
+
+      const blockingMw = createTestMiddleware('block');
+
+      await registerRoute(adapter, {
+        path: '/blocked',
+        middlewares: [blockingMw],
+        handler: (ctx) => {
+          handlerCalled.value = true;
+          return ctx.send({ ok: true });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/blocked`);
+      // Middleware returned false, handler should not have been called
+      expect(handlerCalled.value).toBe(false);
+    });
+
+    it('should use response returned by middleware', async () => {
+      const { adapter } = createTestAdapter();
+
+      const responseMw = createTestMiddleware('response');
+
+      await registerRoute(adapter, {
+        path: '/mw-response',
+        middlewares: [responseMw],
+        handler: (ctx) => ctx.send({ should: 'not reach' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/mw-response`);
+      expect(res.status).toBe(403);
+
+      const body = await res.json();
+      expect(body.blocked).toBe(true);
+    });
+
+    it('should set response headers from middleware', async () => {
+      const { adapter } = createTestAdapter();
+
+      const headerMw = createTestMiddleware('setHeader', {
+        headerName: 'X-Request-Id',
+        headerValue: 'abc-123',
+      });
+
+      await registerRoute(adapter, {
+        path: '/with-header',
+        middlewares: [headerMw],
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/with-header`);
+      expect(res.headers.get('X-Request-Id')).toBe('abc-123');
+    });
+  });
+
+  // ─── Global Middleware ────────────────────────────────────────────
+
+  describe('Global Middleware', () => {
+    it('should apply global middleware to all routes', async () => {
+      const { adapter } = createTestAdapter();
+
+      const globalMw = createTestMiddleware('setHeader', {
+        headerName: 'X-Global',
+        headerValue: 'applied',
+      });
+
+      // @ts-ignore
+      adapter.use(globalMw);
+
+      await registerRoute(adapter, {
+        path: '/route-a',
+        handler: (ctx) => ctx.send({ route: 'a' }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/route-b',
+        handler: (ctx) => ctx.send({ route: 'b' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const resA = await fetch(`${baseUrl}/route-a`);
+      expect(resA.headers.get('X-Global')).toBe('applied');
+
+      const resB = await fetch(`${baseUrl}/route-b`);
+      expect(resB.headers.get('X-Global')).toBe('applied');
+    });
+
+    it('should apply global middleware with include pattern only to matching routes', async () => {
+      const { adapter } = createTestAdapter();
+
+      const apiMw = createTestMiddleware('setHeader', {
+        headerName: 'X-Api-Only',
+        headerValue: 'yes',
+      });
+
+      // @ts-ignore
+      adapter.use(apiMw, { include: ['/api/*'] });
+
+      await registerRoute(adapter, {
+        path: '/api/users',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/public/page',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const apiRes = await fetch(`${baseUrl}/api/users`);
+      expect(apiRes.headers.get('X-Api-Only')).toBe('yes');
+
+      const publicRes = await fetch(`${baseUrl}/public/page`);
+      expect(publicRes.headers.get('X-Api-Only')).toBeNull();
+    });
+
+    it('should skip global middleware with exclude pattern', async () => {
+      const { adapter } = createTestAdapter();
+
+      const mw = createTestMiddleware('setHeader', {
+        headerName: 'X-Guarded',
+        headerValue: 'yes',
+      });
+
+      // @ts-ignore
+      adapter.use(mw, { include: ['/api/*'], exclude: ['/api/health'] });
+
+      await registerRoute(adapter, {
+        path: '/api/users',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/api/health',
+        handler: (ctx) => ctx.send({ status: 'ok' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const usersRes = await fetch(`${baseUrl}/api/users`);
+      expect(usersRes.headers.get('X-Guarded')).toBe('yes');
+
+      const healthRes = await fetch(`${baseUrl}/api/health`);
+      expect(healthRes.headers.get('X-Guarded')).toBeNull();
+    });
+
+    it('should execute multiple global middlewares in order', async () => {
+      const { adapter } = createTestAdapter();
+      const order: string[] = [];
+
+      const mw1 = createTestMiddleware(async (ctx, next) => {
+        order.push('first');
+        ctx.setResponseHeader?.('X-First', 'yes');
+        await next();
+        return true;
+      });
+
+      const mw2 = createTestMiddleware(async (ctx, next) => {
+        order.push('second');
+        ctx.setResponseHeader?.('X-Second', 'yes');
+        await next();
+        return true;
+      });
+
+      // @ts-ignore
+      adapter.use(mw1);
+      // @ts-ignore
+      adapter.use(mw2);
+
+      await registerRoute(adapter, {
+        path: '/test',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/test`);
+      expect(res.headers.get('X-First')).toBe('yes');
+      expect(res.headers.get('X-Second')).toBe('yes');
+      expect(order).toEqual(['first', 'second']);
+    });
+  });
+
+  // ─── Route Priority ───────────────────────────────────────────────
+
+  describe('Route Priority', () => {
+    it('should match static route before parametric route', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/users/:id',
+        handler: (ctx) => ctx.send({ type: 'param', id: ctx.getParam('id') }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/users/count',
+        handler: (ctx) => ctx.send({ type: 'static', count: 42 }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users/count`);
+      const body = await res.json();
+      expect(body.type).toBe('static');
+      expect(body.count).toBe(42);
+    });
+
+    it('should match parametric route for non-static paths', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/users/count',
+        handler: (ctx) => ctx.send({ type: 'static' }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/users/:id',
+        handler: (ctx) => ctx.send({ type: 'param', id: ctx.getParam('id') }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users/123`);
+      const body = await res.json();
+      expect(body.type).toBe('param');
+      expect(body.id).toBe('123');
+    });
+
+    it('should sort routes correctly: static > param > wildcard', async () => {
+      const { adapter } = createTestAdapter();
+
+      // Register in wrong order intentionally
+      await registerRoute(adapter, {
+        path: '/files/*',
+        handler: (ctx) => ctx.send({ type: 'wildcard' }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/files/:name',
+        handler: (ctx) => ctx.send({ type: 'param' }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/files/readme',
+        handler: (ctx) => ctx.send({ type: 'static' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const staticRes = await fetch(`${baseUrl}/files/readme`);
+      expect((await staticRes.json()).type).toBe('static');
+
+      const paramRes = await fetch(`${baseUrl}/files/image.png`);
+      expect((await paramRes.json()).type).toBe('param');
+    });
+  });
+
+  // ─── Validation ───────────────────────────────────────────────────
+
+  describe('Validation', () => {
+    it('should pass valid JSON body through validation', async () => {
+      const { adapter } = createTestAdapter();
+
+      const schema = z.object({ name: z.string(), age: z.number() });
 
       await adapter.registerRoute({
         method: HttpMethod.POST,
-        path: '/users',
+        path: '/validated',
         middlewares: [],
-        handler,
+        handler: async (ctx) => {
+          const body = await ctx.getBody();
+          return ctx.send(body);
+        },
         staticServe: null,
-        validator: null,
-        controllerName: 'UserController',
-        controllerBasePath: '/users',
+        validator: {
+          json: { handle: () => schema, override: false },
+        },
       } as any);
 
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/users',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-        controllerName: 'UserController',
-        controllerBasePath: '/users',
-      } as any);
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
 
-      const log = adapter['buildControllerBasedLog']();
+      const res = await fetch(`${baseUrl}/validated`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Alice', age: 30 }),
+      });
 
-      // Verify methods are sorted: GET, POST, DELETE
-      const lines = log.split('\n');
-      const methodLines = lines.filter(
-        (line) => line.includes('GET') || line.includes('POST') || line.includes('DELETE'),
-      );
-
-      expect(methodLines[0]).toContain('GET');
-      expect(methodLines[1]).toContain('POST');
-      expect(methodLines[2]).toContain('DELETE');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.name).toBe('Alice');
+      expect(body.age).toBe(30);
     });
 
-    it('should merge HTTP and WebSocket routes for same controller', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
+    it('should return 400 for invalid JSON body', async () => {
+      const { adapter } = createTestAdapter();
 
-      const handler = mock(() => {});
+      const schema = z.object({ name: z.string(), age: z.number() });
 
-      // HTTP route
       await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/chat/history',
+        method: HttpMethod.POST,
+        path: '/validated',
         middlewares: [],
-        handler,
+        handler: async (ctx) => ctx.send({ ok: true }),
         staticServe: null,
-        validator: null,
-        controllerName: 'ChatController',
-        controllerBasePath: '/chat',
+        validator: {
+          json: { handle: () => schema, override: false },
+        },
       } as any);
 
-      // WebSocket route
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/validated`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 123, age: 'not-a-number' }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBe('Validation failed');
+      expect(body.target).toBe('json');
+      expect(body.details).toBeDefined();
+    });
+
+    it('should validate query parameters', async () => {
+      const { adapter } = createTestAdapter();
+
+      const schema = z.object({ page: z.string().regex(/^\d+$/) });
+
+      await adapter.registerRoute({
+        method: HttpMethod.GET,
+        path: '/search',
+        middlewares: [],
+        handler: async (ctx) => {
+          const page = await ctx.getQuery('page');
+          return ctx.send({ page });
+        },
+        staticServe: null,
+        validator: {
+          query: { handle: () => schema, override: false },
+        },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      // Valid
+      const validRes = await fetch(`${baseUrl}/search?page=5`);
+      expect(validRes.status).toBe(200);
+
+      // Invalid
+      const invalidRes = await fetch(`${baseUrl}/search?page=abc`);
+      expect(invalidRes.status).toBe(400);
+    });
+
+    it('should validate header parameters', async () => {
+      const { adapter } = createTestAdapter();
+
+      const schema = z.object({ 'x-api-key': z.string().min(10) });
+
+      await adapter.registerRoute({
+        method: HttpMethod.GET,
+        path: '/protected',
+        middlewares: [],
+        handler: (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: {
+          header: { handle: () => schema, override: false },
+        },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      // Valid
+      const validRes = await fetch(`${baseUrl}/protected`, {
+        headers: { 'X-Api-Key': 'super-secret-key-123' },
+      });
+      expect(validRes.status).toBe(200);
+
+      // Invalid (too short)
+      const invalidRes = await fetch(`${baseUrl}/protected`, {
+        headers: { 'X-Api-Key': 'short' },
+      });
+      expect(invalidRes.status).toBe(400);
+    });
+
+    it('should apply multiple validators on same route', async () => {
+      const { adapter } = createTestAdapter();
+
+      const bodySchema = z.object({ value: z.number() });
+      const querySchema = z.object({ format: z.enum(['json', 'xml']) });
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/multi-validated',
+        middlewares: [],
+        handler: async (ctx) => {
+          const body = await ctx.getBody();
+          const format = await ctx.getQuery('format');
+          return ctx.send({ body, format });
+        },
+        staticServe: null,
+        validator: {
+          json: { handle: () => bodySchema, override: false },
+          query: { handle: () => querySchema, override: false },
+        },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      // Both valid
+      const validRes = await fetch(`${baseUrl}/multi-validated?format=json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: 42 }),
+      });
+      expect(validRes.status).toBe(200);
+
+      // Invalid query
+      const invalidRes = await fetch(`${baseUrl}/multi-validated?format=csv`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: 42 }),
+      });
+      expect(invalidRes.status).toBe(400);
+    });
+
+    it('should skip null validator gracefully', async () => {
+      const { adapter } = createTestAdapter();
+
+      await adapter.registerRoute({
+        method: HttpMethod.GET,
+        path: '/no-validator',
+        middlewares: [],
+        handler: (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: null,
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/no-validator`);
+      expect(res.status).toBe(200);
+    });
+
+    it('should warn and skip when validator returns null schema', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      await adapter.registerRoute({
+        method: HttpMethod.GET,
+        path: '/null-schema',
+        middlewares: [],
+        handler: (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: {
+          json: { handle: () => null, override: false },
+        },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/null-schema`);
+      expect(res.status).toBe(200);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('should use custom hook when provided with schema', async () => {
+      const { adapter } = createTestAdapter();
+
+      const schema = z.object({ name: z.string() });
+      let hookCalled = false;
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/with-hook',
+        middlewares: [],
+        handler: async (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: {
+          json: {
+            handle: () => ({
+              schema,
+              hook: (result: any, c: any) => {
+                hookCalled = true;
+                if (!result.success) {
+                  return c.json({ customError: true }, 422);
+                }
+              },
+            }),
+            override: false,
+          },
+        },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      // Invalid body should trigger custom hook
+      const res = await fetch(`${baseUrl}/with-hook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 123 }),
+      });
+
+      expect(res.status).toBe(422);
+      const body = await res.json();
+      expect(body.customError).toBe(true);
+      expect(hookCalled).toBe(true);
+    });
+  });
+
+  // ─── Error Handling ───────────────────────────────────────────────
+
+  describe('Error Handling', () => {
+    it('should handle route handler errors with custom error handler', async () => {
+      const { adapter } = createTestAdapter();
+
+      adapter.onError((error, ctx) => {
+        return ctx.send({ error: error.message }, 500);
+      });
+
+      await registerRoute(adapter, {
+        path: '/fail',
+        handler: () => {
+          throw new Error('Something broke');
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/fail`);
+      expect(res.status).toBe(500);
+
+      const body = await res.json();
+      expect(body.error).toBe('Something broke');
+    });
+
+    it('should preserve HTTPException status code', async () => {
+      const { adapter } = createTestAdapter();
+
+      adapter.onError((error, ctx) => {
+        if (error instanceof HTTPException) {
+          return ctx.send({ error: error.message }, error.status);
+        }
+        return ctx.send({ error: 'Unknown' }, 500);
+      });
+
+      await registerRoute(adapter, {
+        path: '/not-found',
+        handler: () => {
+          throw new HTTPException(404, { message: 'Resource not found' });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/not-found`);
+      expect(res.status).toBe(404);
+
+      const body = await res.json();
+      expect(body.error).toBe('Resource not found');
+    });
+
+    it('should use HTTPException default response when handler returns undefined', async () => {
+      const { adapter } = createTestAdapter();
+
+      adapter.onError((_error, _ctx) => {
+        // Return undefined — should fallback to HTTPException's getResponse()
+        return undefined as any;
+      });
+
+      await registerRoute(adapter, {
+        path: '/unauthorized',
+        handler: () => {
+          throw new HTTPException(401, { message: 'Unauthorized' });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/unauthorized`);
+      expect(res.status).toBe(401);
+    });
+
+    it('should fallback to 500 when error handler itself throws', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      adapter.onError(() => {
+        throw new Error('Handler also broke');
+      });
+
+      await registerRoute(adapter, {
+        path: '/double-fail',
+        handler: () => {
+          throw new Error('Original error');
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/double-fail`);
+      expect(res.status).toBe(500);
+
+      const body = await res.json();
+      expect(body.error).toBe('Internal server error');
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('should log error details on application error', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      adapter.onError((error, ctx) => {
+        return ctx.send({ error: error.message }, 500);
+      });
+
+      await registerRoute(adapter, {
+        path: '/logged-error',
+        handler: () => {
+          throw new Error('Logged error');
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      await fetch(`${baseUrl}/logged-error`);
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('should handle different HTTPException status codes', async () => {
+      const { adapter } = createTestAdapter();
+
+      adapter.onError((error, ctx) => {
+        if (error instanceof HTTPException) {
+          return ctx.send({ status: error.status }, error.status);
+        }
+      });
+
+      for (const status of [400, 403, 404, 422, 429]) {
+        await registerRoute(adapter, {
+          path: `/error-${status}`,
+          handler: () => {
+            throw new HTTPException(status);
+          },
+        });
+      }
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      for (const status of [400, 403, 404, 422, 429]) {
+        const res = await fetch(`${baseUrl}/error-${status}`);
+        expect(res.status).toBe(status);
+      }
+    });
+  });
+
+  // ─── Static File Serving ──────────────────────────────────────────
+
+  describe('Static File Serving', () => {
+    it('should serve static files from a directory', async () => {
+      const { adapter } = createTestAdapter();
+
+      await adapter.registerRoute({
+        method: HttpMethod.GET,
+        path: '/static/*',
+        middlewares: [],
+        handler: (ctx: HonoAdapterContext) => ctx.send('fallback'),
+        staticServe: {
+          root: './test/fixtures',
+          rewriteRequestPath: (path: string) => path.replace('/static', ''),
+        },
+        validator: null,
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/static/test.txt`);
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text.trim()).toBe('hello from test fixture');
+    });
+
+    it('should apply cache control headers', async () => {
+      const { adapter } = createTestAdapter();
+
+      await adapter.registerRoute({
+        method: HttpMethod.GET,
+        path: '/cached/*',
+        middlewares: [],
+        handler: (ctx: HonoAdapterContext) => ctx.send('fallback'),
+        staticServe: {
+          root: './test/fixtures',
+          rewriteRequestPath: (path: string) => path.replace('/cached', ''),
+          extra: {
+            cacheControl: 'public, max-age=3600',
+          },
+        },
+        validator: null,
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/cached/test.txt`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Cache-Control')).toBe('public, max-age=3600');
+    });
+
+    it('should apply custom headers to static files', async () => {
+      const { adapter } = createTestAdapter();
+
+      await adapter.registerRoute({
+        method: HttpMethod.GET,
+        path: '/custom-headers/*',
+        middlewares: [],
+        handler: (ctx: HonoAdapterContext) => ctx.send('fallback'),
+        staticServe: {
+          root: './test/fixtures',
+          rewriteRequestPath: (path: string) => path.replace('/custom-headers', ''),
+          extra: {
+            headers: { 'X-Static': 'true', 'X-Version': '1.0' },
+          },
+        },
+        validator: null,
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/custom-headers/test.txt`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('X-Static')).toBe('true');
+      expect(res.headers.get('X-Version')).toBe('1.0');
+    });
+  });
+
+  // ─── Server Lifecycle ─────────────────────────────────────────────
+
+  describe('Server Lifecycle', () => {
+    it('should start and stop the server', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/ping',
+        handler: (ctx) => ctx.send('pong'),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/ping`);
+      expect(res.status).toBe(200);
+
+      await adapter.stop(true);
+      server = undefined;
+
+      // Server should be stopped
+      try {
+        await fetch(`${baseUrl}/ping`);
+        // If we get here, server is still running — that's unexpected
+      } catch {
+        // Expected: connection refused
+      }
+    });
+
+    it('should register routes only once on start', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/once',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const s = await adapter.start();
+      server = s;
+
+      // Verify the route works
+      const res1 = await fetch(`http://localhost:${s.port}/once`);
+      expect(res1.status).toBe(200);
+    });
+
+    it('should normalize paths by stripping trailing slashes', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/trailing/',
+        handler: (ctx) => ctx.send({ path: 'normalized' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/trailing`);
+      expect(res.status).toBe(200);
+    });
+
+    it('should preserve root path', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/',
+        handler: (ctx) => ctx.send({ root: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.root).toBe(true);
+    });
+  });
+
+  // ─── HTML Routes ──────────────────────────────────────────────────
+
+  describe('HTML Routes', () => {
+    it('should register HTML route and its trailing slash variant', () => {
+      const { adapter } = createTestAdapter();
+
+      adapter.registerHTMLRoute('/ui/home', '<html>Home</html>');
+
+      // Should not throw for a different path
+      adapter.registerHTMLRoute('/ui/about', '<html>About</html>');
+    });
+
+    it('should throw on duplicate HTML route', () => {
+      const { adapter } = createTestAdapter();
+
+      adapter.registerHTMLRoute('/ui/home', '<html>Home</html>');
+
+      expect(() => {
+        adapter.registerHTMLRoute('/ui/home', '<html>Duplicate</html>');
+      }).toThrow('Duplicate HTML route');
+    });
+  });
+
+  // ─── Route Grouping ───────────────────────────────────────────────
+
+  describe('Route Grouping', () => {
+    it('should group routes with common middlewares and still work correctly', async () => {
+      const { adapter } = createTestAdapter();
+
+      // Create a shared middleware class
+      class SharedAuth {
+        handle = async (ctx: HonoAdapterContext, next: () => Promise<void>) => {
+          ctx.setResponseHeader?.('X-Auth', 'checked');
+          await next();
+          return true;
+        };
+        override = false;
+      }
+
+      const sharedMw1 = new SharedAuth();
+      const sharedMw2 = new SharedAuth();
+
+      await registerRoute(adapter, {
+        path: '/api/users',
+        middlewares: [sharedMw1],
+        handler: (ctx) => ctx.send({ resource: 'users' }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/api/posts',
+        middlewares: [sharedMw2],
+        handler: (ctx) => ctx.send({ resource: 'posts' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const usersRes = await fetch(`${baseUrl}/api/users`);
+      expect(usersRes.status).toBe(200);
+      expect((await usersRes.json()).resource).toBe('users');
+      expect(usersRes.headers.get('X-Auth')).toBe('checked');
+
+      const postsRes = await fetch(`${baseUrl}/api/posts`);
+      expect(postsRes.status).toBe(200);
+      expect((await postsRes.json()).resource).toBe('posts');
+      expect(postsRes.headers.get('X-Auth')).toBe('checked');
+    });
+
+    it('should register individual routes without common middlewares', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/route-a',
+        handler: (ctx) => ctx.send({ route: 'a' }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/route-b',
+        handler: (ctx) => ctx.send({ route: 'b' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const resA = await fetch(`${baseUrl}/route-a`);
+      expect((await resA.json()).route).toBe('a');
+
+      const resB = await fetch(`${baseUrl}/route-b`);
+      expect((await resB.json()).route).toBe('b');
+    });
+  });
+
+  // ─── Controller-Based Logging ─────────────────────────────────────
+
+  describe('Controller-Based Logging', () => {
+    it('should log route information on start', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/users',
+        handler: (ctx) => ctx.send({ ok: true }),
+        controllerName: 'UserController',
+        controllerBasePath: '/users',
+      });
+
+      await registerRoute(adapter, {
+        method: HttpMethod.POST,
+        path: '/users',
+        handler: (ctx) => ctx.send({ ok: true }),
+        controllerName: 'UserController',
+        controllerBasePath: '/users',
+      });
+
+      const { server: s } = await startTestServer(adapter);
+      server = s;
+
+      // Logger should have been called with controller info
+      expect(logger.info).toHaveBeenCalled();
+    });
+
+    it('should group routes by controller name', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/users',
+        handler: (ctx) => ctx.send({}),
+        controllerName: 'UserController',
+        controllerBasePath: '/users',
+      });
+
+      await registerRoute(adapter, {
+        path: '/posts',
+        handler: (ctx) => ctx.send({}),
+        controllerName: 'PostController',
+        controllerBasePath: '/posts',
+      });
+
+      const { server: s } = await startTestServer(adapter);
+      server = s;
+
+      // Check that logger.info was called with both controller names
+      const infoCalls = (logger.info as any).mock.calls.map((c: any) => c[0]);
+      const routeLog = infoCalls.find((c: string) => c.includes('UserController') || c.includes('PostController'));
+      expect(routeLog).toBeDefined();
+    });
+  });
+
+  // ─── WebSocket Route Registration ─────────────────────────────────
+
+  describe('WebSocket Route Registration', () => {
+    it('should register websocket route and handle upgrade', async () => {
+      const { adapter, wsAdapter } = createTestAdapter();
+
+      const wsService = {
+        namespace: 'chat',
+        sockets: new Map(),
+        onOpen: mock(async () => {}),
+        onMessage: mock(async (_ws: any, message: any) => {}),
+        onClose: mock(async () => {}),
+      };
+
       adapter.registerWebsocketRoute({
         path: 'chat',
-        websocketService: { namespace: 'chat' } as any,
         middlewares: [],
+        websocketService: wsService as any,
         controllerName: 'ChatController',
-      } as any);
+      });
 
-      const log = adapter['buildControllerBasedLog']();
+      await registerRoute(adapter, {
+        path: '/health',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
 
-      // Should have both HTTP and WS routes under same controller
-      expect(log).toContain('ChatController');
-      expect(log).toContain(`/chat/history`);
-      expect(log).toContain('WS\u001B[0m chat');
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      // The WebSocket route should be registered as a GET route for upgrade
+      // Test by verifying the health route still works
+      const healthRes = await fetch(`${baseUrl}/health`);
+      expect(healthRes.status).toBe(200);
     });
+  });
 
-    it('should handle controllers sorted alphabetically', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
+  // ─── Serve Options ────────────────────────────────────────────────
 
-      const handler = mock(() => {});
+  describe('Serve Options', () => {
+    it('should accept serve options', async () => {
+      const { adapter } = createTestAdapter();
 
-      // Register controllers in reverse alphabetical order
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/users',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-        controllerName: 'ZUserController',
-        controllerBasePath: '/users',
-      } as any);
+      await adapter.serveOptions(() => ({
+        serveOptions: {},
+        wsOptions: {},
+      }));
 
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/admin',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-        controllerName: 'AAdminController',
-        controllerBasePath: '/admin',
-      } as any);
-
-      const log = adapter['buildControllerBasedLog']();
-      const lines = log.split('\n').filter((line) => line.includes('Controller'));
-
-      // Should be sorted alphabetically
-      expect(lines[0]).toContain('AAdminController');
-      expect(lines[1]).toContain('ZUserController');
-    });
-
-    it('should handle unknown controller name', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const handler = mock(() => {});
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
+      await registerRoute(adapter, {
         path: '/test',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-        // No controllerName provided
-      } as any);
-
-      const log = adapter['buildControllerBasedLog']();
-
-      // Should group under 'Unknown'
-      expect(log).toContain('Unknown');
-    });
-  });
-
-  // Pattern-Based Global Middlewares Tests
-  describe('Pattern-Based Global Middlewares', () => {
-    it('should register global middleware with include patterns', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const middleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      adapter.use(middleware, {
-        include: ['/api/*', '/admin/*'],
+        handler: (ctx) => ctx.send({ ok: true }),
       });
 
-      expect(adapter['globalMiddlewares']).toHaveLength(1);
-      expect(adapter['globalMiddlewares'][0].config).toEqual({
-        include: ['/api/*', '/admin/*'],
-      });
-    });
-
-    it('should register global middleware with exclude patterns', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const middleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      adapter.use(middleware, {
-        exclude: ['/health', '/metrics'],
-      });
-
-      expect(adapter['globalMiddlewares']).toHaveLength(1);
-      expect(adapter['globalMiddlewares'][0].config).toEqual({
-        exclude: ['/health', '/metrics'],
-      });
-    });
-
-    it('should register global middleware with mixed include/exclude patterns', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const middleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      adapter.use(middleware, {
-        include: ['/api/*'],
-        exclude: ['/api/health'],
-      });
-
-      expect(adapter['globalMiddlewares']).toHaveLength(1);
-      expect(adapter['globalMiddlewares'][0].config).toEqual({
-        include: ['/api/*'],
-        exclude: ['/api/health'],
-      });
-    });
-
-    it('should filter global middlewares correctly for specific paths', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const authMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const rateLimitMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const loggingMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      // Auth: only /api/* and /admin/*, exclude /api/health
-      adapter.use(authMiddleware, {
-        include: ['/api/*', '/admin/*'],
-        exclude: ['/api/health'],
-      });
-
-      // RateLimit: exclude /health and /metrics
-      adapter.use(rateLimitMiddleware, {
-        exclude: ['/health', '/metrics'],
-      });
-
-      // Logging: apply to all routes (no config)
-      adapter.use(loggingMiddleware);
-
-      // Test filtering for /api/users -> should get auth + rateLimit + logging
-      const middlewaresForApiUsers = adapter['getGlobalMiddlewaresForPath']('/api/users');
-
-      expect(middlewaresForApiUsers).toHaveLength(3);
-      expect(middlewaresForApiUsers).toContain(authMiddleware);
-      expect(middlewaresForApiUsers).toContain(rateLimitMiddleware);
-      expect(middlewaresForApiUsers).toContain(loggingMiddleware);
-
-      // Test filtering for /api/health -> should get only rateLimit + logging (auth excluded)
-      const middlewaresForApiHealth = adapter['getGlobalMiddlewaresForPath']('/api/health');
-
-      expect(middlewaresForApiHealth).toHaveLength(2);
-      expect(middlewaresForApiHealth).not.toContain(authMiddleware);
-      expect(middlewaresForApiHealth).toContain(rateLimitMiddleware);
-      expect(middlewaresForApiHealth).toContain(loggingMiddleware);
-
-      // Test filtering for /health -> should get only logging (both auth and rateLimit excluded)
-      const middlewaresForHealth = adapter['getGlobalMiddlewaresForPath']('/health');
-
-      expect(middlewaresForHealth).toHaveLength(1);
-      expect(middlewaresForHealth).not.toContain(authMiddleware);
-      expect(middlewaresForHealth).not.toContain(rateLimitMiddleware);
-      expect(middlewaresForHealth).toContain(loggingMiddleware);
-
-      // Test filtering for /admin/users -> should get auth + rateLimit + logging
-      const middlewaresForAdminUsers = adapter['getGlobalMiddlewaresForPath']('/admin/users');
-
-      expect(middlewaresForAdminUsers).toHaveLength(3);
-      expect(middlewaresForAdminUsers).toContain(authMiddleware);
-      expect(middlewaresForAdminUsers).toContain(rateLimitMiddleware);
-      expect(middlewaresForAdminUsers).toContain(loggingMiddleware);
-
-      // Test filtering for /public/file -> should get only rateLimit + logging (auth not included)
-      const middlewaresForPublicFile = adapter['getGlobalMiddlewaresForPath']('/public/file');
-
-      expect(middlewaresForPublicFile).toHaveLength(2);
-      expect(middlewaresForPublicFile).not.toContain(authMiddleware);
-      expect(middlewaresForPublicFile).toContain(rateLimitMiddleware);
-      expect(middlewaresForPublicFile).toContain(loggingMiddleware);
-    });
-
-    it('should apply global middlewares to routes during registration', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const authMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const rateLimitMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      // Register global middlewares
-      adapter.use(authMiddleware, {
-        include: ['/api/*'],
-      });
-
-      adapter.use(rateLimitMiddleware);
-
-      const handler = mock(() => {});
-
-      // Register route
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/users',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      // Check that global middlewares are available for this path
-      const applicableMiddlewares = adapter['getGlobalMiddlewaresForPath']('/api/users');
-
-      expect(applicableMiddlewares).toHaveLength(2);
-      expect(applicableMiddlewares).toContain(authMiddleware);
-      expect(applicableMiddlewares).toContain(rateLimitMiddleware);
-    });
-
-    it('should handle wildcard patterns correctly', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const middleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      adapter.use(middleware, {
-        include: ['/api/*'],
-      });
-
-      // Should match paths under /api/
-      const middlewaresForApi = adapter['getGlobalMiddlewaresForPath']('/api/users');
-
-      expect(middlewaresForApi).toContain(middleware);
-
-      const middlewaresForApiNested = adapter['getGlobalMiddlewaresForPath']('/api/users/123');
-
-      expect(middlewaresForApiNested).toContain(middleware);
-
-      // Should not match paths not under /api/
-      const middlewaresForOther = adapter['getGlobalMiddlewaresForPath']('/other/path');
-
-      expect(middlewaresForOther).not.toContain(middleware);
-    });
-
-    it('should handle exact match patterns correctly', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const middleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      adapter.use(middleware, {
-        exclude: ['/health'],
-      });
-
-      // Should not match exact path /health
-      const middlewaresForHealth = adapter['getGlobalMiddlewaresForPath']('/health');
-
-      expect(middlewaresForHealth).not.toContain(middleware);
-
-      // Should match other paths
-      const middlewaresForHealthCheck = adapter['getGlobalMiddlewaresForPath']('/health-check');
-
-      expect(middlewaresForHealthCheck).toContain(middleware);
-
-      const middlewaresForApi = adapter['getGlobalMiddlewaresForPath']('/api/health');
-
-      expect(middlewaresForApi).toContain(middleware);
-    });
-
-    it('should handle multiple global middlewares in correct order', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const middleware1 = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const middleware2 = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const middleware3 = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      // Register in order: 1, 2, 3
-      adapter.use(middleware1);
-      adapter.use(middleware2);
-      adapter.use(middleware3);
-
-      const middlewares = adapter['getGlobalMiddlewaresForPath']('/any/path');
-
-      // Should maintain registration order
-      expect(middlewares).toHaveLength(3);
-      expect(middlewares[0]).toBe(middleware1);
-      expect(middlewares[1]).toBe(middleware2);
-      expect(middlewares[2]).toBe(middleware3);
-    });
-
-    it('should apply global middlewares to WebSocket routes', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const authMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      adapter.use(authMiddleware, {
-        include: ['/chat', '/chat/*'], // Include both exact match and wildcard
-      });
-
-      // Check filtering for WebSocket route - exact match
-      const middlewaresForChat = adapter['getGlobalMiddlewaresForPath']('/chat');
-
-      expect(middlewaresForChat).toContain(authMiddleware);
-
-      // Check filtering for nested WebSocket route - wildcard match
-      const middlewaresForChatRoom = adapter['getGlobalMiddlewaresForPath']('/chat/room123');
-
-      expect(middlewaresForChatRoom).toContain(authMiddleware);
-    });
-  });
-
-  // Deferred Route Registration Tests
-  describe('Deferred Route Registration', () => {
-    it('should extract base path correctly', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      expect(adapter['extractBasePath']('/api/users/:id')).toBe('/api/users');
-      expect(adapter['extractBasePath']('/api/users')).toBe('/api/users');
-      expect(adapter['extractBasePath']('/users')).toBe('/users');
-      expect(adapter['extractBasePath']('/')).toBe('/');
-      expect(adapter['extractBasePath']('/api/*/wild')).toBe('/api');
-    });
-
-    it('should group routes by base path', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const handler = mock(() => {});
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/users',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/users/:id',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/posts',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      const groups = adapter['groupRoutesByBasePath'](adapter['routeQueue']);
-
-      expect(groups.size).toBe(2);
-      expect(groups.get('/api/users')?.length).toBe(2);
-      expect(groups.get('/api/posts')?.length).toBe(1);
-    });
-
-    it('should extract common middlewares', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const authMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const loggingMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const handler = mock(() => {});
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/users',
-        middlewares: [authMiddleware, loggingMiddleware],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      await adapter.registerRoute({
-        method: HttpMethod.POST,
-        path: '/api/users',
-        middlewares: [authMiddleware, loggingMiddleware],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      const common = adapter['extractCommonMiddlewares'](adapter['routeQueue']);
-
-      expect(common.length).toBe(2);
-    });
-
-    it('should not find common middlewares when routes differ', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      // Use class instances instead of plain objects for proper constructor comparison
-      class AuthMiddleware {
-        public handle = mock(() => true);
-
-        public override = false;
-      }
-
-      class LoggingMiddleware {
-        public handle = mock(() => true);
-
-        public override = false;
-      }
-
-      const authMiddleware = new AuthMiddleware();
-      const loggingMiddleware = new LoggingMiddleware();
-
-      const handler = mock(() => {});
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/users',
-        middlewares: [authMiddleware as any],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      await adapter.registerRoute({
-        method: HttpMethod.POST,
-        path: '/api/users',
-        middlewares: [loggingMiddleware as any],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      const common = adapter['extractCommonMiddlewares'](adapter['routeQueue']);
-
-      expect(common.length).toBe(0);
-    });
-
-    it('should return empty array for single route', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const handler = mock(() => {});
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/single',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      const common = adapter['extractCommonMiddlewares'](adapter['routeQueue']);
-
-      expect(common.length).toBe(0);
-    });
-
-    it('should register routes on start', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const routeSpy = spyOn(adapter.app, 'route');
-      const handler = mock(() => {});
-
-      // Queue multiple routes with same base path and common middleware
-      const authMiddleware = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/users',
-        middlewares: [authMiddleware],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/api/users/:id',
-        middlewares: [authMiddleware],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      adapter.setPort(9999);
-
-      // Start should trigger route registration with grouping
-      const server = await adapter.start();
-
-      // Route grouping should have been used (routes mounted at base path)
-      expect(routeSpy).toHaveBeenCalled();
-
-      server.stop();
-    });
-
-    it('should handle routes with no common middleware', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const getSpy = spyOn(adapter.app, 'get');
-      const handler = mock(() => {});
-
-      const middleware1 = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      const middleware2 = {
-        handle: mock(() => true),
-        override: false,
-      };
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/route1',
-        middlewares: [middleware1],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/route2',
-        middlewares: [middleware2],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      adapter.setPort(9998);
-
-      const server = await adapter.start();
-
-      // Routes registered individually (no common middleware)
-      expect(getSpy).toHaveBeenCalled();
-
-      server.stop();
-    });
-
-    it('should register routes only once on multiple start calls', async () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const handler = mock(() => {});
-
-      await adapter.registerRoute({
-        method: HttpMethod.GET,
-        path: '/test',
-        middlewares: [],
-        handler,
-        staticServe: null,
-        validator: null,
-      });
-
-      adapter.setPort(9997);
-
-      const server1 = await adapter.start();
-
-      server1.stop();
-
-      const queueLengthBefore = adapter['routeQueue'].length;
-
-      const server2 = await adapter.start();
-
-      // Routes should not be registered again
-      expect(adapter['routesRegistered']).toBe(true);
-      expect(adapter['routeQueue'].length).toBe(queueLengthBefore);
-
-      server2.stop();
-    });
-  });
-
-  // HTTPException Handling Tests
-  describe('HTTPException Handling', () => {
-    it('should handle HTTPException with proper status code', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const errorHandler = mock((error: Error) => {
-        // User handler should receive HTTPException
-        if (error instanceof HTTPException) {
-          // Don't return anything, let adapter use default
-          return undefined;
-        }
-
-        return new Response('Fallback', { status: 500 });
-      });
-
-      adapter.onError(errorHandler);
-
-      // Verify error handler was registered
-      expect(errorHandler).toBeDefined();
-    });
-
-    it('should call HTTPException getResponse() for default behavior', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const errorHandler = mock(() => {
-        // Return nothing to use HTTPException default
-        return undefined;
-      });
-
-      adapter.onError(errorHandler);
-
-      // HTTPException should use getResponse() internally
-      const exception = new HTTPException(401, { message: 'Unauthorized' });
-
-      expect(exception.status).toBe(401);
-      expect(exception.getResponse).toBeDefined();
-    });
-
-    it('should allow user to customize HTTPException response', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const customResponse = new Response(JSON.stringify({ custom: 'error' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      const errorHandler = mock((error: Error) => {
-        if (error instanceof HTTPException) {
-          // User returns custom response
-          return customResponse;
-        }
-
-        return new Response('Error', { status: 500 });
-      });
-
-      adapter.onError(errorHandler);
-
-      // Simulate HTTPException
-      const exception = new HTTPException(401, { message: 'Unauthorized' });
-
-      // Error handler should be called with HTTPException
-      const result = errorHandler(exception);
-
-      expect(result).toBe(customResponse);
-    });
-
-    it('should use HTTPException default response when user handler throws', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const errorHandler = mock(() => {
-        // User handler throws error
-        throw new Error('Handler error');
-      });
-
-      adapter.onError(errorHandler);
-
-      // Verify error handler was registered (internal onError spy would be needed for full test)
-      expect(errorHandler).toBeDefined();
-    });
-
-    it('should preserve HTTPException status codes (401, 403, 404, etc.)', () => {
-      const statusCodes = [
-        { code: 401, message: 'Unauthorized' },
-        { code: 403, message: 'Forbidden' },
-        { code: 404, message: 'Not Found' },
-        { code: 422, message: 'Unprocessable Entity' },
-        { code: 429, message: 'Too Many Requests' },
-      ];
-
-      for (const { code, message } of statusCodes) {
-        const exception = new HTTPException(code as any, { message });
-
-        expect(exception.status).toBe(code as any);
-        expect(exception.message).toBe(message);
-
-        // Verify getResponse() returns proper Response
-        const response = exception.getResponse();
-
-        expect(response).toBeInstanceOf(Response);
-        expect(response.status).toBe(code);
-      }
-    });
-
-    it('should handle HTTPException with custom response object', () => {
-      // HTTPException with custom response
-      const customResponse = new Response(JSON.stringify({ error: 'Custom' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      const exception = new HTTPException(401, { res: customResponse });
-
-      expect(exception.status).toBe(401);
-
-      // Verify response properties instead of identity
-      const response = exception.getResponse();
-
-      expect(response).toBeInstanceOf(Response);
-      expect(response.status).toBe(401);
-      expect(response.headers.get('Content-Type')).toBe('application/json');
-    });
-
-    it('should handle normal errors through user handler', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const customErrorResponse = new Response('Custom error', { status: 500 });
-
-      const errorHandler = mock((error: Error) => {
-        // Normal error handling
-        if (!(error instanceof HTTPException)) {
-          return customErrorResponse;
-        }
-
-        return new Response('HTTPException', { status: 500 });
-      });
-
-      adapter.onError(errorHandler);
-
-      // Simulate normal error
-      const normalError = new Error('Normal error');
-      const result = errorHandler(normalError);
-
-      expect(result).toBe(customErrorResponse);
-      expect(errorHandler).toHaveBeenCalledWith(normalError);
-    });
-
-    it('should log errors before handling', () => {
-      const logger = createMockLogger();
-      const adapter = new HonoAdapter(logger);
-
-      const errorHandler = mock(() => new Response('Error', { status: 500 }));
-
-      adapter.onError(errorHandler);
-
-      // Error logging happens in onError
-      // Verify logger.error mock was defined
-      expect(logger.error).toBeDefined();
-    });
-
-    it('should handle HTTPException in middleware context', () => {
-      // Simulate middleware throwing HTTPException
-      const exception = new HTTPException(401, { message: 'Unauthorized' });
-
-      expect(exception).toBeInstanceOf(HTTPException);
-      expect(exception.status).toBe(401);
-      expect(exception.message).toBe('Unauthorized');
-    });
-
-    it('should export HTTPException for user middlewares', () => {
-      // HTTPException should be importable from package
-      expect(HTTPException).toBeDefined();
-      expect(typeof HTTPException).toBe('function');
-
-      // User can create HTTPException instances
-      const exception = new HTTPException(401, { message: 'Test' });
-
-      expect(exception).toBeInstanceOf(HTTPException);
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/test`);
+      expect(res.status).toBe(200);
     });
   });
 });

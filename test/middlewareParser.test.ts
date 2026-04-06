@@ -1,8 +1,15 @@
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock, afterEach } from 'bun:test';
+import type { Server } from 'bun';
 import { middlewareParser } from '../lib/utils/middlewareParser';
 import { HonoContextWrapper } from '../lib/HonoContextWrapper';
 import type { BaseMiddleware } from '@asenajs/asena/adapter';
 import type { Context as HonoAdapterContext } from '../lib/defaults';
+import {
+  createTestAdapter,
+  startTestServer,
+  registerRoute,
+  createTestMiddleware,
+} from './utils/testHelpers';
 
 describe('middlewareParser', () => {
   const createMockContext = () => {
@@ -419,6 +426,101 @@ describe('middlewareParser', () => {
 
       expect(middleware1.handle).toHaveBeenCalled();
       expect(middleware2.handle).toHaveBeenCalled();
+    });
+  });
+
+  // ─── Integration Tests ──────────────────────────────────────────
+
+  describe('Integration — Real HTTP Pipeline', () => {
+    let server: Server<any> | undefined;
+
+    afterEach(async () => {
+      if (server) {
+        server.stop(true);
+        server = undefined;
+      }
+    });
+
+    it('parsed middleware should execute in real request pipeline', async () => {
+      const { adapter } = createTestAdapter();
+
+      const mw = createTestMiddleware('setHeader', {
+        headerName: 'X-Parsed',
+        headerValue: 'works',
+      });
+
+      await registerRoute(adapter, {
+        path: '/test',
+        middlewares: [mw],
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/test`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('X-Parsed')).toBe('works');
+    });
+
+    it('middleware returning false should stop real request with 403', async () => {
+      const { adapter } = createTestAdapter();
+
+      const blockMw = createTestMiddleware('block');
+
+      await registerRoute(adapter, {
+        path: '/blocked',
+        middlewares: [blockMw],
+        handler: (ctx) => ctx.send({ should: 'not reach' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/blocked`);
+      expect(res.status).toBe(403);
+    });
+
+    it('middleware returning Response should set response', async () => {
+      const { adapter } = createTestAdapter();
+
+      const responseMw = createTestMiddleware('response');
+
+      await registerRoute(adapter, {
+        path: '/custom-response',
+        middlewares: [responseMw],
+        handler: (ctx) => ctx.send({ should: 'not reach' }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/custom-response`);
+      expect(res.status).toBe(403);
+      expect((await res.json()).blocked).toBe(true);
+    });
+
+    it('error in middleware should propagate to error handler', async () => {
+      const { adapter } = createTestAdapter();
+
+      adapter.onError((_err, ctx) => {
+        return ctx.send({ caught: true }, 500);
+      });
+
+      const throwMw = createTestMiddleware('throw');
+
+      await registerRoute(adapter, {
+        path: '/error',
+        middlewares: [throwMw],
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/error`);
+      expect(res.status).toBe(500);
+      expect((await res.json()).caught).toBe(true);
     });
   });
 });

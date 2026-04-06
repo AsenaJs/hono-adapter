@@ -17,14 +17,13 @@ describe('Integration Tests', () => {
   let adapter: HonoAdapter;
   let server: any;
   let baseUrl: string;
-  const port = 3334;
 
   beforeAll(async () => {
     const logger = createMockLogger();
     const wsAdapter = new HonoWebsocketAdapter(logger);
 
     adapter = new HonoAdapter(logger, wsAdapter);
-    adapter.setPort(port);
+    adapter.setPort(0);
 
     // Register test routes
     await adapter.registerRoute({
@@ -79,11 +78,11 @@ describe('Integration Tests', () => {
     });
 
     server = await adapter.start();
-    baseUrl = `http://localhost:${port}`;
+    baseUrl = `http://localhost:${server.port}`;
   });
 
   afterAll(() => {
-    server?.stop();
+    server?.stop(true);
   });
 
   it('should respond to GET /health', async () => {
@@ -166,14 +165,13 @@ describe('Route Grouping Tests - registerControllerRoutes', () => {
   let adapter: HonoAdapter;
   let server: any;
   let baseUrl: string;
-  const port = 3335;
 
   beforeAll(async () => {
     const logger = createMockLogger();
     const wsAdapter = new HonoWebsocketAdapter(logger);
 
     adapter = new HonoAdapter(logger, wsAdapter);
-    adapter.setPort(port);
+    adapter.setPort(0);
 
     // Mock middleware that adds a value to context
     const mockMiddleware = {
@@ -244,11 +242,11 @@ describe('Route Grouping Tests - registerControllerRoutes', () => {
     });
 
     server = await adapter.start();
-    baseUrl = `http://localhost:${port}`;
+    baseUrl = `http://localhost:${server.port}`;
   });
 
   afterAll(() => {
-    server?.stop();
+    server?.stop(true);
   });
 
   it('should handle grouped route - GET /api/products', async () => {

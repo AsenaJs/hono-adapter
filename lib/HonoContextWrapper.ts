@@ -1,14 +1,23 @@
+import type { Server } from 'bun';
 import type { Context, HonoRequest } from 'hono';
-import type { AsenaContext, CookieExtra, SendOptions } from '@asenajs/asena/adapter';
+import type { AsenaContext, AsenaSSEStreamWriter, AsenaStreamWriter, AsenaVariables, CookieExtra, SendOptions } from '@asenajs/asena/adapter';
 import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } from 'hono/cookie'; // add delete cookie
+import { stream as honoStream, streamSSE as honoStreamSSE, streamText as honoStreamText } from 'hono/streaming';
+import type { SSEStreamingApi } from 'hono/streaming';
 import type { CookieOptions } from 'hono/utils/cookie';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { StreamingApi } from 'hono/utils/stream';
 
 export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, Response> {
   private _context: Context;
 
-  public constructor(context: Context) {
+  private _server?: Server<never>;
+
+  private _requestIp?: string | null;
+
+  public constructor(context: Context, server?: Server<never>) {
     this._context = context;
+    this._server = server;
   }
 
   public get req() {
@@ -55,6 +64,17 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     return this._context.req.queries(query);
   }
 
+  public getAllQueries(): Record<string, string | string[]> {
+    const queries = this._context.req.queries();
+    const result: Record<string, string | string[]> = {};
+
+    for (const [key, values] of Object.entries(queries)) {
+      result[key] = values.length === 1 ? values[0] : values;
+    }
+
+    return result;
+  }
+
   public send(data: string | any, statusOrOptions?: SendOptions | number): Response {
     const { headers = {}, status = 200 } =
       typeof statusOrOptions === 'number' ? { status: statusOrOptions } : statusOrOptions || {};
@@ -66,7 +86,7 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     }
 
     if (typeof data === 'string') {
-      return this._context.text(data);
+      return this._context.text(data, status as ContentfulStatusCode);
     }
 
     return this._context.json(data, status as ContentfulStatusCode, headers);
@@ -96,14 +116,36 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     deleteCookie(this._context, name, extraOptions);
   }
 
+  public getRequestIp(): string | null {
+    if (this._requestIp === undefined) {
+      if (this._server) {
+        const addr = this._server.requestIP(this._context.req.raw);
+
+        this._requestIp = addr?.address ?? null;
+      } else {
+        this._requestIp = null;
+      }
+    }
+
+    return this._requestIp;
+  }
+
+  public setResponseHeader(key: string, value: string): void {
+    this._context.res.headers.append(key, value);
+  }
+
   public redirect(url: string) {
     return this._context.redirect(url);
   }
 
-  public getValue<T>(key: string): T {
-    return this._context.get(key) as T;
+  public getValue<K extends keyof AsenaVariables>(key: K): AsenaVariables[K];
+  public getValue<T = any>(key: string): T;
+  public getValue(key: string): any {
+    return this._context.get(key);
   }
 
+  public setValue<K extends keyof AsenaVariables>(key: K, value: AsenaVariables[K]): void;
+  public setValue(key: string, value: any): void;
   public setValue(key: string, value: any): void {
     this._context.set(key, value);
   }
@@ -129,6 +171,80 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     });
 
     return this._context.html(data, status as ContentfulStatusCode, headers);
+  }
+
+  public stream(
+    cb: (stream: AsenaStreamWriter) => Promise<void>,
+    onError?: (error: Error, stream: AsenaStreamWriter) => Promise<void>,
+  ): Response {
+    return honoStream(
+      this._context,
+      async (honoStream) => {
+        await cb(this.wrapStreamingApi(honoStream));
+      },
+      onError
+        ? async (e, honoStream) => {
+            await onError(e, this.wrapStreamingApi(honoStream));
+          }
+        : undefined,
+    );
+  }
+
+  public streamSSE(
+    cb: (stream: AsenaSSEStreamWriter) => Promise<void>,
+    onError?: (error: Error, stream: AsenaSSEStreamWriter) => Promise<void>,
+  ): Response {
+    return honoStreamSSE(
+      this._context,
+      async (honoStream) => {
+        await cb(this.wrapSSEStreamingApi(honoStream));
+      },
+      onError
+        ? async (e, honoStream) => {
+            await onError(e, this.wrapSSEStreamingApi(honoStream));
+          }
+        : undefined,
+    );
+  }
+
+  public streamText(
+    cb: (stream: AsenaStreamWriter) => Promise<void>,
+    onError?: (error: Error, stream: AsenaStreamWriter) => Promise<void>,
+  ): Response {
+    return honoStreamText(
+      this._context,
+      async (honoStream) => {
+        await cb(this.wrapStreamingApi(honoStream));
+      },
+      onError
+        ? async (e, honoStream) => {
+            await onError(e, this.wrapStreamingApi(honoStream));
+          }
+        : undefined,
+    );
+  }
+
+  private wrapStreamingApi(honoStream: StreamingApi): AsenaStreamWriter {
+    return {
+      write: (input: Uint8Array | string) => honoStream.write(input).then(() => {}),
+      writeln: (input: string) => honoStream.writeln(input).then(() => {}),
+      close: () => honoStream.close(),
+      pipe: (body: ReadableStream) => honoStream.pipe(body),
+      onAbort: (listener: () => void | Promise<void>) => honoStream.onAbort(listener),
+      get aborted() {
+        return honoStream.aborted;
+      },
+      get closed() {
+        return honoStream.closed;
+      },
+    };
+  }
+
+  private wrapSSEStreamingApi(honoStream: SSEStreamingApi): AsenaSSEStreamWriter {
+    return {
+      ...this.wrapStreamingApi(honoStream),
+      writeSSE: (message) => honoStream.writeSSE(message),
+    };
   }
 
   public get context(): Context {
