@@ -33,7 +33,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   public app: Hono;
 
-  private _strict: boolean = true;
+  private readonly _strict: boolean = true;
 
   private server: Server<WebSocketData>;
 
@@ -55,7 +55,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   public async stop(closeActiveConnections = true): Promise<void> {
     if (this.server) {
-      this.server.stop(closeActiveConnections);
+      await this.server.stop(closeActiveConnections);
     }
   }
 
@@ -82,6 +82,11 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Stored separately and merged into Bun.serve() routes at start time
    */
   private htmlRoutes = new Map<string, unknown>();
+
+  /**
+   * Queue of FrontendController route metadata for deferred logging at start time
+   */
+  private frontEndRouteQueue: { path: string; controllerName: string; controllerBasePath: string }[] = [];
 
   private routesRegistered = false;
 
@@ -174,12 +179,18 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * @param path - Full URL path (e.g., '/ui/home')
    * @param htmlBundle - The HTML bundle returned by importing an .html file
    */
-  public registerHTMLRoute(path: string, htmlBundle: unknown): void {
+  public registerHTMLRoute(
+    path: string,
+    htmlBundle: unknown,
+    controllerName: string,
+    controllerBasePath: string,
+  ): void {
     if (this.htmlRoutes.has(path)) {
       throw new Error(`Duplicate HTML route: "${path}" is already registered.`);
     }
 
     this.htmlRoutes.set(path, htmlBundle);
+    this.frontEndRouteQueue.push({ path, controllerName, controllerBasePath });
 
     // Register trailing slash variant for consistent routing
     if (path !== '/' && !path.endsWith('/')) {
@@ -249,7 +260,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     this.websocketAdapter.startWebsocket(this.server);
 
     // Log controller-based route information
-    if (this.routeQueue.length > 0 || this.wsRouteQueue.length > 0) {
+    if (this.routeQueue.length > 0 || this.wsRouteQueue.length > 0 || this.frontEndRouteQueue.length > 0) {
       this.logger.info('\n' + this.buildControllerBasedLog());
     }
 
@@ -742,6 +753,18 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         );
       }
     }
+
+    // Log FrontendControllers
+    const frontEndGroups = this.groupFrontEndRoutesByController();
+
+    for (const [controllerName, group] of frontEndGroups) {
+      const routeCount = group.routes.length;
+      const routeText = routeCount === 1 ? 'route' : 'routes';
+
+      this.logger.info(
+        `${green('✓')} Successfully registered ${yellow('FRONTEND')} ${blue(controllerName)} ${yellow(`(${routeCount} ${routeText})`)}`,
+      );
+    }
   }
 
   /**
@@ -758,12 +781,15 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // Combine: global middlewares -> route middlewares
     const allMiddlewares = [...preparedGlobalMiddlewares, ...preparedMiddlewares];
 
-    (this.app as any).get(`/${wsRoute.path}`, ...allMiddlewares, async (c: Context, next) => {
+    const normalizedWsPath = this.normalizePath(`/${wsRoute.path}`);
+
+    (this.app as any).get(normalizedWsPath, ...allMiddlewares, async (c: Context, next) => {
       const websocketData = c.get('_websocketData') || {};
 
       const id = bun.randomUUIDv7();
 
-      const data: WebSocketData = { values: websocketData, id, path: wsRoute.path };
+      const dataPath = normalizedWsPath.startsWith('/') ? normalizedWsPath.slice(1) : normalizedWsPath;
+      const data: WebSocketData = { values: websocketData, id, path: dataPath };
       const upgradeResult = this.server.upgrade(c.req.raw, { data });
 
       if (upgradeResult) {
@@ -1059,6 +1085,40 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       lines.push(''); // Empty line between controllers
     }
 
+    // Add FrontendController groups
+    const frontEndGroups = this.groupFrontEndRoutesByController();
+    const sortedFrontEnd = Array.from(frontEndGroups.entries()).sort(([a], [b]) => a.localeCompare(b));
+
+    for (const [controllerName, group] of sortedFrontEnd) {
+      lines.push(`  ${blue(controllerName)} ${yellow(`(${group.basePath})`)}`);
+
+      for (const route of group.routes) {
+        lines.push(`    ${green('HTML')} ${route.path}`);
+      }
+
+      lines.push('');
+    }
+
     return lines.join('\n');
+  }
+
+  /**
+   * Groups FrontendController routes by controller name for logging
+   */
+  private groupFrontEndRoutesByController(): Map<string, { basePath: string; routes: { path: string }[] }> {
+    const groups = new Map<string, { basePath: string; routes: { path: string }[] }>();
+
+    for (const route of this.frontEndRouteQueue) {
+      if (!groups.has(route.controllerName)) {
+        groups.set(route.controllerName, {
+          basePath: route.controllerBasePath,
+          routes: [],
+        });
+      }
+
+      groups.get(route.controllerName).routes.push({ path: route.path });
+    }
+
+    return groups;
   }
 }

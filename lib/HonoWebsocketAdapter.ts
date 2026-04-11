@@ -66,11 +66,16 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
       throw new Error('WebSocket service is required');
     }
 
-    const namespace = webSocketService.namespace;
+    const rawNamespace = webSocketService.namespace;
 
-    if (!namespace) {
+    if (!rawNamespace) {
       throw new Error('WebSocket namespace is required');
     }
+
+    // Normalize namespace: strip trailing slash for consistent lookup
+    const namespace = rawNamespace.length > 1 && rawNamespace.endsWith('/')
+      ? rawNamespace.slice(0, -1)
+      : rawNamespace;
 
     // Validate namespace format (alphanumeric, hyphens, underscores, slashes)
     if (!/^[a-zA-Z0-9\-_/]+$/.exec(namespace)) {
