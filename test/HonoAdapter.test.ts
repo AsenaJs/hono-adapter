@@ -1363,20 +1363,56 @@ describe('HonoAdapter', () => {
     it('should register HTML route and its trailing slash variant', () => {
       const { adapter } = createTestAdapter();
 
-      adapter.registerHTMLRoute('/ui/home', '<html>Home</html>');
+      adapter.registerHTMLRoute('/ui/home', '<html>Home</html>', 'FrontEnd', '/ui');
 
       // Should not throw for a different path
-      adapter.registerHTMLRoute('/ui/about', '<html>About</html>');
+      adapter.registerHTMLRoute('/ui/about', '<html>About</html>', 'FrontEnd', '/ui');
     });
 
     it('should throw on duplicate HTML route', () => {
       const { adapter } = createTestAdapter();
 
-      adapter.registerHTMLRoute('/ui/home', '<html>Home</html>');
+      adapter.registerHTMLRoute('/ui/home', '<html>Home</html>', 'FrontEnd', '/ui');
 
       expect(() => {
-        adapter.registerHTMLRoute('/ui/home', '<html>Duplicate</html>');
+        adapter.registerHTMLRoute('/ui/home', '<html>Duplicate</html>', 'FrontEnd', '/ui');
       }).toThrow('Duplicate HTML route');
+    });
+
+    it('should log FRONTEND controller summary on start', async () => {
+      const { adapter, logger } = createTestAdapter();
+      const mockBundle = new Response('<html>Home</html>', { headers: { 'Content-Type': 'text/html' } });
+      const mockBundle2 = new Response('<html>About</html>', { headers: { 'Content-Type': 'text/html' } });
+
+      adapter.registerHTMLRoute('/ui/home', mockBundle, 'FrontEnd', '/ui');
+      adapter.registerHTMLRoute('/ui/about', mockBundle2, 'FrontEnd', '/ui');
+
+      server = (await adapter.start()) as any;
+
+      const infoCalls = (logger.info as any).mock.calls.map((c: any) => c[0]);
+      const summaryLog = infoCalls.find((msg: string) => msg.includes('FRONTEND') && msg.includes('FrontEnd'));
+      const detailLog = infoCalls.find((msg: string) => msg.includes('HTML') && msg.includes('/ui/home'));
+
+      expect(summaryLog).toBeDefined();
+      expect(detailLog).toBeDefined();
+    });
+
+    it('should group frontend routes by controller in log output', async () => {
+      const { adapter, logger } = createTestAdapter();
+      const mockBundle1 = new Response('<html>Home</html>', { headers: { 'Content-Type': 'text/html' } });
+      const mockBundle2 = new Response('<html>Dashboard</html>', { headers: { 'Content-Type': 'text/html' } });
+
+      adapter.registerHTMLRoute('/ui/home', mockBundle1, 'FrontEnd', '/ui');
+      adapter.registerHTMLRoute('/admin/dashboard', mockBundle2, 'AdminFrontEnd', '/admin');
+
+      server = (await adapter.start()) as any;
+
+      const infoCalls = (logger.info as any).mock.calls.map((c: any) => c[0]);
+      const hasFrontEnd = infoCalls.some((msg: string) => msg.includes('FrontEnd'));
+      const hasAdmin = infoCalls.some((msg: string) => msg.includes('AdminFrontEnd'));
+
+      expect(hasFrontEnd).toBe(true);
+      expect(hasAdmin).toBe(true);
     });
   });
 
@@ -1537,6 +1573,65 @@ describe('HonoAdapter', () => {
       // Test by verifying the health route still works
       const healthRes = await fetch(`${baseUrl}/health`);
       expect(healthRes.status).toBe(200);
+    });
+
+    it('should normalize websocket path by stripping trailing slash', async () => {
+      const { adapter } = createTestAdapter();
+
+      const onMessageMock = mock(async () => {});
+
+      const wsService = {
+        namespace: 'ws/stats/',
+        sockets: new Map(),
+        onOpenInternal: mock(async () => {}),
+        onMessage: mock(async (ws: any, message: any) => {
+          ws.send(typeof message === 'string' ? message : message.toString());
+          await onMessageMock();
+        }),
+        onCloseInternal: mock(async () => {}),
+      };
+
+      adapter.registerWebsocketRoute({
+        path: 'ws/stats/',
+        middlewares: [],
+        websocketService: wsService as any,
+        controllerName: 'StatsController',
+      });
+
+      await registerRoute(adapter, {
+        path: '/health',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s } = await startTestServer(adapter);
+      server = s;
+
+      // Connect WITHOUT trailing slash — should work after normalization
+      const ws = new WebSocket(`ws://localhost:${server.port}/ws/stats`);
+
+      const messagePromise = new Promise<string>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('WS message timeout')), 3000);
+
+        ws.onmessage = (e) => {
+          clearTimeout(timeout);
+          resolve(typeof e.data === 'string' ? e.data : '');
+        };
+
+        ws.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error('WebSocket error'));
+        };
+      });
+
+      await new Promise<void>((resolve) => {
+        ws.onopen = () => resolve();
+      });
+
+      ws.send('ping');
+      const response = await messagePromise;
+      expect(response).toBe('ping');
+
+      ws.close();
     });
   });
 

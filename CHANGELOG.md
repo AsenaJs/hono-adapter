@@ -1,5 +1,21 @@
 # @asenajs/hono-adapter
 
+## 1.5.1
+
+### Patch Changes
+
+- ### Features
+  - **FrontendController Logging**: FrontendController routes are now logged in the controller summary with route counts, grouped by controller name and base path.
+  - **Route Pattern**: Added `routePattern` getter to `HonoContextWrapper` that returns Hono's `req.routePath`, enabling OpenTelemetry and middleware to access matched route patterns.
+
+  ### Fixes
+  - **WebSocket Trailing Slash**: Fixed WebSocket connection failures caused by trailing slashes in namespace paths. Both `HonoAdapter` and `HonoWebsocketAdapter` now normalize paths by stripping trailing slashes.
+  - **Server Stop**: `stop()` method now properly awaits server shutdown.
+
+  ### Tests
+  - Added FrontendController summary logging tests.
+  - Added WebSocket trailing slash normalization test.
+
 ## 1.5.0
 
 ### Minor Changes

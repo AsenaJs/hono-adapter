@@ -28,6 +28,14 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     return this._context.res;
   }
 
+  public get routePattern(): string | undefined {
+    try {
+      return this._context.req.routePath;
+    } catch {
+      return undefined;
+    }
+  }
+
   public get headers(): Record<string, string> {
     return this._context.req.header();
   }
