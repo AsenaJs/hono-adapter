@@ -14,7 +14,7 @@ HTTP and WebSocket adapter implementation based on Hono web framework for Asena.
 
 ## Requirements
 
-- [Bun](https://bun.sh)
+- [Bun](https://bun.sh) v1.3.12 or higher
 - TypeScript v5.8.2 or above
 
 ## Installation
