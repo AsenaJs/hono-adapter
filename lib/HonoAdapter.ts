@@ -7,6 +7,7 @@ import type { BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena
 import {
   AsenaAdapter,
   type AsenaServeOptions,
+  type AsenaStartOptions,
   type BaseMiddleware,
   type BaseValidator,
   type RouteParams,
@@ -228,7 +229,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     }
   }
 
-  public async start() {
+  public async start(options?: AsenaStartOptions) {
     // Register all queued routes with optimization
     if (!this.routesRegistered) {
       // Register global middlewares at top level BEFORE routes
@@ -243,10 +244,18 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     const serveConfig: any = {
       ...this.options.serveOptions,
-      port: this.port,
       fetch: this.app.fetch,
       websocket: this.websocketAdapter.websocket,
     };
+
+    if (options?.unix) {
+      // Bun throws "Cannot specify both hostname and unix", and a port means nothing here
+      serveConfig.unix = options.unix;
+      delete serveConfig.hostname;
+      delete serveConfig.port;
+    } else {
+      serveConfig.port = this.port;
+    }
 
     // Add HTML routes if any are registered (FrontendController pages)
     // Bun checks routes first, then falls through to fetch (Hono) for API routes
@@ -264,7 +273,11 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       this.logger.info('\n' + this.buildControllerBasedLog());
     }
 
-    this.logger.info(`Server running at http://localhost:${this.server.port}`);
+    this.logger.info(
+      options?.unix
+        ? `Server running at unix:${options.unix}`
+        : `Server running at http://localhost:${this.server.port}`,
+    );
 
     return this.server;
   }
