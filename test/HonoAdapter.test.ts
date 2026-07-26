@@ -4,6 +4,8 @@ import { HonoAdapter } from '../lib/HonoAdapter';
 import { HonoWebsocketAdapter } from '../lib/HonoWebsocketAdapter';
 import { HttpMethod } from '@asenajs/asena/web-types';
 import { HTTPException } from 'hono/http-exception';
+import { isValidationError } from '@asenajs/asena/adapter';
+import { ValidationError } from '../lib/errors';
 import { z } from 'zod';
 import type { Server } from 'bun';
 import type { Context as HonoAdapterContext } from '../lib/defaults';
@@ -391,8 +393,7 @@ describe('HonoAdapter', () => {
       await registerRoute(adapter, {
         method: HttpMethod.POST,
         path: '/create',
-        handler: (ctx) =>
-          ctx.send({ id: 1 }, { status: 201, headers: { 'X-Custom': 'value' } }),
+        handler: (ctx) => ctx.send({ id: 1 }, { status: 201, headers: { 'X-Custom': 'value' } }),
       });
 
       const { server: s, baseUrl } = await startTestServer(adapter);
@@ -1045,6 +1046,158 @@ describe('HonoAdapter', () => {
       const body = await res.json();
       expect(body.customError).toBe(true);
       expect(hookCalled).toBe(true);
+    });
+
+    it('should route validation failures to onError as a ValidationError', async () => {
+      const { adapter } = createTestAdapter();
+
+      let seen: Error | undefined;
+
+      adapter.onError((error, ctx) => {
+        seen = error;
+
+        if (isValidationError(error)) {
+          return ctx.send({ success: false, errors: error.issues }, 400);
+        }
+
+        return ctx.send({ success: false }, 500);
+      });
+
+      const schema = z.object({ email: z.string().min(3) });
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/mapped',
+        middlewares: [],
+        handler: async (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: { json: { handle: () => schema, override: false } },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/mapped`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'x' }),
+      });
+
+      expect(res.status).toBe(400);
+
+      const body = await res.json();
+
+      expect(body.success).toBe(false);
+      expect(body.errors[0].path).toEqual(['email']);
+      expect(body.errors[0].message).toBeString();
+
+      // Subclassing HTTPException is what keeps an existing
+      // `instanceof HTTPException` branch answering 400 instead of 500
+      expect(seen).toBeInstanceOf(ValidationError);
+      expect(seen).toBeInstanceOf(HTTPException);
+      expect((seen as ValidationError).status).toBe(400);
+      expect((seen as ValidationError).target).toBe('json');
+    });
+
+    it('should keep the default envelope when no error handler is configured', async () => {
+      const { adapter } = createTestAdapter();
+
+      const schema = z.object({ email: z.string().min(3) });
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/unmapped',
+        middlewares: [],
+        handler: async (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: { json: { handle: () => schema, override: false } },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/unmapped`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'x' }),
+      });
+
+      expect(res.status).toBe(400);
+
+      const body = await res.json();
+
+      expect(body.error).toBe('Validation failed');
+      expect(body.target).toBe('json');
+      expect(body.details.fieldErrors.email).toBeDefined();
+    });
+
+    it('should keep the default envelope when a hook returns no response', async () => {
+      const { adapter } = createTestAdapter();
+
+      const schema = z.object({ name: z.string() });
+      const seenTargets: boolean[] = [];
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/logging-hook',
+        middlewares: [],
+        handler: async (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: {
+          json: {
+            // A hook added purely to observe - it must not change the error contract
+            handle: () => ({ schema, hook: (result: any) => void seenTargets.push(result.success) }),
+            override: false,
+          },
+        },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/logging-hook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 123 }),
+      });
+
+      expect(res.status).toBe(400);
+
+      const body = await res.json();
+
+      expect(body.error).toBe('Validation failed');
+      expect(body.target).toBe('json');
+      expect(seenTargets).toEqual([false]);
+    });
+
+    it('should still run a hook on successful validation', async () => {
+      const { adapter } = createTestAdapter();
+
+      const schema = z.object({ name: z.string() });
+      let hookRuns = 0;
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/hook-on-success',
+        middlewares: [],
+        handler: async (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: {
+          json: { handle: () => ({ schema, hook: () => void hookRuns++ }), override: false },
+        },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/hook-on-success`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Alice' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(hookRuns).toBe(1);
     });
   });
 
