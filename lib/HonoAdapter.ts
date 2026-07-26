@@ -20,7 +20,8 @@ import type { HonoAdapterOptions, HonoErrorHandler, HonoHandler, StaticServeExtr
 import { blue, green, red, type ServerLogger, yellow } from '@asenajs/asena/logger';
 import { type Hook, zValidator } from '@hono/zod-validator';
 import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
-import type { ZodError, ZodType } from 'zod';
+import { flattenError, type ZodError, type ZodType } from 'zod';
+import { ValidationError } from './errors';
 import { middlewareParser } from './utils/middlewareParser';
 import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
@@ -39,6 +40,13 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   private server: Server<WebSocketData>;
 
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
+
+  /**
+   * Whether the application registered an error handler. Validation failures are only
+   * worth throwing when something is there to catch them - otherwise Hono answers 500
+   * and the adapter's 400 envelope is the better response.
+   */
+  private hasErrorHandler = false;
 
   /**
    * Normalizes a route path for Hono compatibility.
@@ -135,10 +143,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       this.websocketAdapter.logger = this.logger;
     }
 
-    this._strict = typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions
-      ? loggerOrOptions.strict ?? true
-      : true;
-
+    this._strict =
+      typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions ? (loggerOrOptions.strict ?? true) : true;
 
     if (honoApp) {
       this.app = honoApp;
@@ -263,7 +269,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       serveConfig.routes = Object.fromEntries(this.htmlRoutes);
     }
 
-
     this.server = bun.serve(serveConfig);
 
     this.websocketAdapter.startWebsocket(this.server);
@@ -308,6 +313,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * ```
    */
   public onError(errorHandler: HonoErrorHandler) {
+    this.hasErrorHandler = true;
+
     this.app.onError((error, context) => {
       // Log error with full details
       this.logger.error('Application error occurred:', {
@@ -507,31 +514,37 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           }
         }
 
-        // Create validator with proper error handling
-        const validator = zValidator(
-          key as keyof ValidationTargets,
-          schema,
-          hook ||
-            ((result, c) => {
-              // Default hook with better error formatting
-              if (!result.success) {
-                return c.json(
-                  {
-                    error: 'Validation failed',
-                    details: (
-                      result as {
-                        success: false;
-                        error: ZodError;
-                        data: any;
-                      }
-                    ).error.flatten(),
-                    target: key,
-                  },
-                  400,
-                );
-              }
-            }),
-        );
+        // The user hook runs first and wins if it answers the request, but it no
+        // longer *replaces* the default handling: a hook added for logging or
+        // context enrichment used to silently change that route's error contract
+        const validator = zValidator(key as keyof ValidationTargets, schema, async (result, c) => {
+          if (hook) {
+            const hookResult = await hook(result, c);
+
+            // Only the two forms zValidator itself honours short-circuit here; anything
+            // else falls through to the default so the contract stays consistent
+            if (hookResult instanceof Response) {
+              return hookResult;
+            }
+
+            if (hookResult && typeof hookResult === 'object' && 'response' in hookResult) {
+              return hookResult;
+            }
+          }
+
+          if (result.success) {
+            return;
+          }
+
+          // zValidator intersects the result union with `{ target }`, which stops TS
+          // narrowing it on `success`. The error type is also widened to a
+          // `$ZodError | ZodError` union because zValidator accepts zod-core schemas;
+          // ours are always classic `z.ZodType` (see ValidationSchema), so the runtime
+          // value is a classic ZodError.
+          const { error } = result as unknown as { error: ZodError };
+
+          return this.handleValidationFailure(error, key, c);
+        });
 
         validators.push(validator);
       } catch (error) {
@@ -544,6 +557,27 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     }
 
     return validators;
+  }
+
+  /**
+   * @description Answer a failed validation.
+   *
+   * Throws a `ValidationError` so the failure travels the same path as every other
+   * error and reaches `ConfigService.onError`, which is what the documentation has
+   * always described. When the application defines no error handler Hono would turn
+   * a thrown error into a bare 500, so the adapter's own 400 envelope stays as the
+   * fallback and those applications see no change at all.
+   * @param {ZodError} error - The Zod failure
+   * @param {string} target - Which part of the request failed
+   * @param {Context} context - The Hono context
+   * @returns {Response} The fallback response, when no error handler is configured
+   */
+  private handleValidationFailure(error: ZodError, target: string, context: Context): Response {
+    if (!this.hasErrorHandler) {
+      return context.json({ error: 'Validation failed', details: flattenError(error), target }, 400);
+    }
+
+    throw new ValidationError(error, target);
   }
 
   /**
@@ -865,7 +899,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         groupMethodMap[route.method] ??
         ((path: string, ...handlers: any[]) => (group as any).on([route.method.toUpperCase()], path, ...handlers));
 
-
       // Calculate relative path
       let relativePath = route.path;
 
@@ -882,7 +915,11 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
       // Register to group
       if (route.staticServe) {
-        methodHandler(normalizedRelativePath, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(route.staticServe)));
+        methodHandler(
+          normalizedRelativePath,
+          ...allMiddlewares,
+          serveStatic(this.prepareStaticServeOptions(route.staticServe)),
+        );
       } else {
         const handler = this.prepareHandler(route.handler);
 
@@ -900,7 +937,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   private async registerRouteDirect(
     route: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
   ): Promise<void> {
-
     const preparedMiddlewares = this.prepareMiddlewares(route.middlewares || []);
     const validators = route.validator ? await this.prepareValidator(route.validator) : [];
 
@@ -910,7 +946,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const methodHandler =
       this.methodMap[route.method] ??
       ((path: string, ...handlers: any[]) => (this.app as any).on([route.method.toUpperCase()], path, ...handlers));
-
 
     // Normalize path for Hono: strip trailing slash (except root '/')
     // Hono strict:false strips trailing slash from incoming requests,
