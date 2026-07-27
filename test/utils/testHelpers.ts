@@ -121,10 +121,7 @@ export function createTestMiddleware(
       break;
     case 'setHeader':
       handleFn = async (ctx, next) => {
-        ctx.setResponseHeader?.(
-          options?.headerName ?? 'X-Test-Middleware',
-          options?.headerValue ?? 'applied',
-        );
+        ctx.setResponseHeader?.(options?.headerName ?? 'X-Test-Middleware', options?.headerValue ?? 'applied');
         await next();
         return true;
       };

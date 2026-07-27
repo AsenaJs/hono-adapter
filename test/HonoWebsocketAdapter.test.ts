@@ -3,17 +3,11 @@ import type { Server } from 'bun';
 import { HonoWebsocketAdapter } from '../lib/HonoWebsocketAdapter';
 import { AsenaWebSocketService } from '@asenajs/asena/web-socket';
 import { HttpMethod } from '@asenajs/asena/web-types';
-import {
-  createMockLogger,
-  createTestAdapter,
-  startTestServer,
-  registerRoute,
-  sleep,
-} from './utils/testHelpers';
+import { createMockLogger, createTestAdapter, startTestServer, registerRoute, sleep } from './utils/testHelpers';
 
 // Helper to create a minimal WebSocket service for testing
 class TestWebSocketService extends AsenaWebSocketService<any> {
-  public onOpenMock = mock(async () => {});
+  public onOpenMock = mock(async (_ws: any) => {});
   public onMessageMock = mock(async (_ws: any, _msg: any) => {});
   public onCloseMock = mock(async (_ws: any, _code: number, _reason: string) => {});
 
@@ -73,9 +67,7 @@ describe('HonoWebsocketAdapter', () => {
       const service = new TestWebSocketService();
       // namespace is not set
 
-      expect(() => adapter.registerWebSocket(service as any)).toThrow(
-        'WebSocket namespace is required',
-      );
+      expect(() => adapter.registerWebSocket(service as any)).toThrow('WebSocket namespace is required');
     });
 
     it('should throw for invalid namespace format', () => {
@@ -127,9 +119,7 @@ describe('HonoWebsocketAdapter', () => {
       const logger = createMockLogger();
       const adapter = new HonoWebsocketAdapter(logger);
 
-      expect(() => adapter.setConnectionLimit('chat', 0)).toThrow(
-        'Connection limit must be at least 1',
-      );
+      expect(() => adapter.setConnectionLimit('chat', 0)).toThrow('Connection limit must be at least 1');
     });
 
     it('getConnectionCount should return 0 initially', () => {

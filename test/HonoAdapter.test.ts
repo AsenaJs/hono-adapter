@@ -1131,6 +1131,79 @@ describe('HonoAdapter', () => {
       expect(body.details.fieldErrors.email).toBeDefined();
     });
 
+    it('should log the failure when no error handler is configured', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      const schema = z.object({ email: z.string().min(3) });
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/unlogged',
+        middlewares: [],
+        handler: async (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: { json: { handle: () => schema, override: false } },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      await fetch(`${baseUrl}/unlogged`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'x' }),
+      });
+
+      // The adapter used to answer this 400 from inside the validator middleware, so it never
+      // threw and never reached `onError` - the one 4xx an application could not see at any
+      // level. (`createMockLogger` has no `debug`, so the 4xx level falls back to `info`;
+      // assert on the message, not the method.)
+      const logged = (logger.info as any).mock.calls.find((call: unknown[]) =>
+        String(call[0]).includes('Request rejected'),
+      );
+
+      expect(logged).toBeDefined();
+      expect(logged[1].status).toBe(400);
+      expect(logged[1].path).toBe('/unlogged');
+    });
+
+    it('should answer the same envelope when the error handler declines', async () => {
+      const { adapter } = createTestAdapter();
+
+      // Before the envelope moved onto `ValidationError.getResponse()`, this fell back to
+      // `HTTPException`'s bare `Validation failed` text - so the body depended on whether an
+      // unrelated hook existed, which is exactly what the single path removed.
+      adapter.onError((() => undefined) as any);
+
+      const schema = z.object({ email: z.string().min(3) });
+
+      await adapter.registerRoute({
+        method: HttpMethod.POST,
+        path: '/declined',
+        middlewares: [],
+        handler: async (ctx) => ctx.send({ ok: true }),
+        staticServe: null,
+        validator: { json: { handle: () => schema, override: false } },
+      } as any);
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/declined`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'x' }),
+      });
+
+      expect(res.status).toBe(400);
+
+      const body = await res.json();
+
+      expect(body.error).toBe('Validation failed');
+      expect(body.target).toBe('json');
+      expect(body.details.fieldErrors.email).toBeDefined();
+    });
+
     it('should keep the default envelope when a hook returns no response', async () => {
       const { adapter } = createTestAdapter();
 
@@ -1298,11 +1371,15 @@ describe('HonoAdapter', () => {
       expect(res.status).toBe(500);
 
       const body = await res.json();
-      expect(body.error).toBe('Internal server error');
+
+      // The same body `@asenajs/ergenecore` answers. It used to be `{error: 'Internal server
+      // error', message, timestamp}` here and `text/plain` for an app with no config at all,
+      // so one failure had three envelopes across the two adapters.
+      expect(body).toEqual({ error: 'Internal Server Error' });
       expect(logger.error).toHaveBeenCalled();
     });
 
-    it('should log error details on application error', async () => {
+    it('should not log an application error the handler answered itself', async () => {
       const { adapter, logger } = createTestAdapter();
 
       adapter.onError((error, ctx) => {
@@ -1320,7 +1397,12 @@ describe('HonoAdapter', () => {
       server = s;
 
       await fetch(`${baseUrl}/logged-error`);
-      expect(logger.error).toHaveBeenCalled();
+
+      // The framework's default log fires exactly when its default *response* does. An
+      // application whose handler answered has already recorded the failure; a second line
+      // from the adapter would only duplicate it. See errorLogging.test.ts for the case where
+      // the handler declines - there the framework does still log.
+      expect(logger.error).not.toHaveBeenCalled();
     });
 
     it('should handle different HTTPException status codes', async () => {
@@ -1332,7 +1414,8 @@ describe('HonoAdapter', () => {
         }
       });
 
-      for (const status of [400, 403, 404, 422, 429]) {
+      // `as const`: HTTPException takes a ContentfulStatusCode, not a widened `number`.
+      for (const status of [400, 403, 404, 422, 429] as const) {
         await registerRoute(adapter, {
           path: `/error-${status}`,
           handler: () => {
@@ -1344,7 +1427,8 @@ describe('HonoAdapter', () => {
       const { server: s, baseUrl } = await startTestServer(adapter);
       server = s;
 
-      for (const status of [400, 403, 404, 422, 429]) {
+      // `as const`: HTTPException takes a ContentfulStatusCode, not a widened `number`.
+      for (const status of [400, 403, 404, 422, 429] as const) {
         const res = await fetch(`${baseUrl}/error-${status}`);
         expect(res.status).toBe(status);
       }

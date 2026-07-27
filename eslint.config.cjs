@@ -17,6 +17,8 @@ module.exports = tseslint.config(
   // Global ignores
   {
     ignores: [
+      // Release tooling: outside the tsconfig project, so typed linting cannot see it
+      'scripts/**',
       'dist/**',
       'node_modules/**',
       '*.js',
@@ -48,7 +50,13 @@ module.exports = tseslint.config(
   {
     rules: {
       // TypeScript rules
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      // `varsIgnorePattern` / `ignoreRestSiblings`: `const { a: _a, ...rest } = obj` is how a
+      // key is dropped from an object, and the discarded binding is the point - it is not a
+      // variable someone forgot to use. Matches the kafka/redis/otel configs.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
       '@typescript-eslint/method-signature-style': 'off',
 
       // Relax some strict TypeScript rules for decorator metadata

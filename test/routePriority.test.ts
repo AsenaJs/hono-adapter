@@ -86,14 +86,7 @@ describe('compareRoutePriority', () => {
   // ── Array.sort() integration ──
 
   test('sorts mixed routes correctly', () => {
-    const paths = [
-      '/api/users/:id',
-      '/api/users/count',
-      '/api/users/search',
-      '/api/users',
-      '/api/*',
-      '/health',
-    ];
+    const paths = ['/api/users/:id', '/api/users/count', '/api/users/search', '/api/users', '/api/*', '/health'];
 
     const sorted = [...paths].sort(compareRoutePriority);
 

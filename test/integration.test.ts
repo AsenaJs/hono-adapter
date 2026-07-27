@@ -9,7 +9,8 @@ const createMockLogger = (): ServerLogger => ({
   info: () => {},
   warn: () => {},
   error: () => {},
-  // @ts-ignore
+  // Required by ServerLogger and called during bootstrap - it was missing here.
+  profile: () => {},
   debug: () => {},
 });
 
@@ -72,10 +73,11 @@ describe('Integration Tests', () => {
       validator: null,
     });
 
-    // Set up error handler
-    adapter.onError((error, context) => {
-      return context.send({ error: error.message }, 500);
-    });
+    // An unmatched route no longer reaches onError - it has its own hook, so this handler
+    // never has to ask "was this actually an error?".
+    adapter.onError((error, context) => context.send({ error: error.message }, 500));
+
+    adapter.onNotFound((context, request) => context.send({ error: 'Not Found', path: request.path }, 404));
 
     server = await adapter.start();
     baseUrl = `http://localhost:${server.port}`;
@@ -106,10 +108,13 @@ describe('Integration Tests', () => {
     expect(data).toEqual(testData);
   });
 
-  it('should return 404 for non-existent routes', async () => {
+  it('should route non-existent routes through onNotFound', async () => {
     const response = await fetch(`${baseUrl}/nonexistent`);
+    const data = await response.json();
 
     expect(response.status).toBe(404);
+    // The application's own envelope, not Hono's text/plain default
+    expect(data).toEqual({ error: 'Not Found', path: '/nonexistent' });
   });
 
   it('should handle errors gracefully', async () => {

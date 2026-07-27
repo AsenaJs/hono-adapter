@@ -73,9 +73,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
     }
 
     // Normalize namespace: strip trailing slash for consistent lookup
-    const namespace = rawNamespace.length > 1 && rawNamespace.endsWith('/')
-      ? rawNamespace.slice(0, -1)
-      : rawNamespace;
+    const namespace = rawNamespace.length > 1 && rawNamespace.endsWith('/') ? rawNamespace.slice(0, -1) : rawNamespace;
 
     // Validate namespace format (alphanumeric, hyphens, underscores, slashes)
     if (!/^[a-zA-Z0-9\-_/]+$/.exec(namespace)) {
@@ -225,14 +223,15 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
         return;
       }
 
-      let handler = asenaWebSocketService[type];
+      // Bound at the point it is read. Pulling a method off an object and binding it two
+      // statements later is the shape `unbound-method` exists to flag, and the gap is where a
+      // future edit loses `this`.
+      const handler = asenaWebSocketService[type]?.bind(asenaWebSocketService);
 
       if (!handler) {
         // Not all handlers are required, so this is not an error
         return;
       }
-
-      handler = handler.bind(asenaWebSocketService);
 
       try {
         await (handler as (socket: AsenaSocket<WebSocketData>, ...args: any[]) => void | Promise<void>)(

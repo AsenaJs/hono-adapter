@@ -1,12 +1,12 @@
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
 import type { Server } from 'bun';
 import type { Context as HonoAdapterContext } from '../lib/defaults';
+// AsenaContext declares `html: (data: string) => …` while every adapter implements
+// `html(data, statusOrOptions?)`. These two cases exercise the second argument, so they are
+// typed against the concrete wrapper. The core-interface gap is flagged in the report.
+import type { HonoContextWrapper } from '../lib/HonoContextWrapper';
 import { HttpMethod } from '@asenajs/asena/web-types';
-import {
-  createTestAdapter,
-  startTestServer,
-  registerRoute,
-} from './utils/testHelpers';
+import { createTestAdapter, startTestServer, registerRoute } from './utils/testHelpers';
 
 describe('HonoContextWrapper', () => {
   let server: Server<any> | undefined;
@@ -403,8 +403,7 @@ describe('HonoContextWrapper', () => {
 
       await registerRoute(adapter, {
         path: '/opts',
-        handler: (ctx) =>
-          ctx.send({ ok: true }, { status: 201, headers: { 'X-Custom': 'val' } }),
+        handler: (ctx) => ctx.send({ ok: true }, { status: 201, headers: { 'X-Custom': 'val' } }),
       });
 
       const { server: s, baseUrl } = await startTestServer(adapter);
@@ -440,7 +439,7 @@ describe('HonoContextWrapper', () => {
 
       await registerRoute(adapter, {
         path: '/not-found',
-        handler: (ctx) => ctx.html('<h1>404</h1>', 404),
+        handler: (ctx: HonoContextWrapper) => ctx.html('<h1>404</h1>', 404),
       });
 
       const { server: s, baseUrl } = await startTestServer(adapter);
@@ -456,8 +455,7 @@ describe('HonoContextWrapper', () => {
 
       await registerRoute(adapter, {
         path: '/html-opts',
-        handler: (ctx) =>
-          ctx.html('<p>Hi</p>', { status: 200, headers: { 'X-Page': 'home' } }),
+        handler: (ctx: HonoContextWrapper) => ctx.html('<p>Hi</p>', { status: 200, headers: { 'X-Page': 'home' } }),
       });
 
       const { server: s, baseUrl } = await startTestServer(adapter);

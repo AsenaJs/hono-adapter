@@ -4,12 +4,7 @@ import { middlewareParser } from '../lib/utils/middlewareParser';
 import { HonoContextWrapper } from '../lib/HonoContextWrapper';
 import type { BaseMiddleware } from '@asenajs/asena/adapter';
 import type { Context as HonoAdapterContext } from '../lib/defaults';
-import {
-  createTestAdapter,
-  startTestServer,
-  registerRoute,
-  createTestMiddleware,
-} from './utils/testHelpers';
+import { createTestAdapter, startTestServer, registerRoute, createTestMiddleware } from './utils/testHelpers';
 
 describe('middlewareParser', () => {
   const createMockContext = () => {
