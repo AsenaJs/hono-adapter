@@ -16,12 +16,18 @@ import {
 } from '@asenajs/asena/adapter';
 import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asenajs/asena/server/config';
 import { shouldApplyMiddleware } from '@asenajs/asena/utils';
-import type { HonoAdapterOptions, HonoErrorHandler, HonoHandler, StaticServeExtras } from './types';
+import type {
+  HonoAdapterOptions,
+  HonoErrorHandler,
+  HonoHandler,
+  HonoNotFoundHandler,
+  StaticServeExtras,
+} from './types';
 import { blue, green, red, type ServerLogger, yellow } from '@asenajs/asena/logger';
 import { type Hook, zValidator } from '@hono/zod-validator';
 import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
-import { flattenError, type ZodError, type ZodType } from 'zod';
-import { ValidationError } from './errors';
+import type { ZodError, ZodType } from 'zod';
+import { brandHonoHttpException, ValidationError } from './errors';
 import { middlewareParser } from './utils/middlewareParser';
 import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
@@ -37,16 +43,21 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   private readonly _strict: boolean = true;
 
+  private readonly logErrors: boolean = true;
+
   private server: Server<WebSocketData>;
 
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
 
   /**
-   * Whether the application registered an error handler. Validation failures are only
-   * worth throwing when something is there to catch them - otherwise Hono answers 500
-   * and the adapter's 400 envelope is the better response.
+   * Whether the *application* registered an error handler. Read only by `start()`, to decide
+   * whether the framework's own default needs registering - Hono keeps a single `onError`, so
+   * registering both would replace the application's.
    */
   private hasErrorHandler = false;
+
+  /** Whether the application registered an onNotFound hook (see start()) */
+  private hasNotFoundHandler = false;
 
   /**
    * Normalizes a route path for Hono compatibility.
@@ -143,14 +154,20 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       this.websocketAdapter.logger = this.logger;
     }
 
-    this._strict =
-      typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions ? (loggerOrOptions.strict ?? true) : true;
+    const isOptionsObject = typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions;
+
+    this._strict = isOptionsObject ? (loggerOrOptions.strict ?? true) : true;
+    this.logErrors = isOptionsObject ? (loggerOrOptions.logErrors ?? true) : true;
 
     if (honoApp) {
       this.app = honoApp;
     } else {
       this.app = new Hono({ strict: this._strict });
     }
+
+    // Teach isHttpException() about Hono's own exception class. Doing it here rather than at
+    // module scope keeps the side effect tied to actually using the adapter.
+    brandHonoHttpException();
   }
 
   /**
@@ -246,6 +263,22 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       this.routesRegistered = true;
     }
 
+    // Unconditional 404 default, so an app with no config still answers the same envelope
+    // ergenecore does instead of Hono's text/plain. A registered onNotFound has already
+    // replaced this - Hono keeps only the last notFound handler, and prepareConfigs runs
+    // during APPLICATION_SETUP, before start().
+    if (!this.hasNotFoundHandler) {
+      this.app.notFound((context) => this.defaultNotFoundResponse(context.req.path, context.req.method));
+    }
+
+    // Same reasoning, for errors. `onError` was registered only when the application declared the
+    // hook, so an app with no config answered a 500 and wrote nothing to the ServerLogger: Hono's
+    // built-in handler dumps a bare stack to stderr with no path, method or status, `logErrors:
+    // false` could not suppress it, and a 4xx produced no output at all.
+    if (!this.hasErrorHandler) {
+      this.app.onError((error, context) => this.defaultErrorResponse(error, context.req.path, context.req.method));
+    }
+
     this.websocketAdapter.prepareWebSocket(this.options?.wsOptions);
 
     const serveConfig: any = {
@@ -266,6 +299,24 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // Add HTML routes if any are registered (FrontendController pages)
     // Bun checks routes first, then falls through to fetch (Hono) for API routes
     if (this.htmlRoutes.size > 0) {
+      // Bun checks `routes` before falling through to `fetch`, so a page registered on a path an
+      // API route also serves silently shadows it: the request answers 200 with the HTML and the
+      // API route becomes unreachable while still appearing in the startup log. Ergenecore
+      // rejects the same collision at startup; match it rather than ship a route that exists in
+      // the logs and not on the wire.
+      const reservedPaths = new Set<string>([
+        ...this.routeQueue.map((route) => route.path),
+        ...this.wsRouteQueue.map((route) => (route.path.startsWith('/') ? route.path : `/${route.path}`)),
+      ]);
+
+      for (const htmlPath of this.htmlRoutes.keys()) {
+        if (reservedPaths.has(htmlPath)) {
+          throw new Error(
+            `HTML route collision at "${htmlPath}": path already registered as an API or WebSocket route.`,
+          );
+        }
+      }
+
       serveConfig.routes = Object.fromEntries(this.htmlRoutes);
     }
 
@@ -288,26 +339,80 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
-   * Registers global error handler with enhanced error handling capabilities
+   * Registers the handler for requests that match no route.
    *
-   * Supports Hono's HTTPException for proper status code handling:
-   * - HTTPException instances are passed to user handler for custom handling
-   * - If user handler returns a response, it's used
-   * - Otherwise, HTTPException's default response is returned
-   * - Other errors follow normal error handling flow
+   * Separate from {@link onError}: an unmatched route is a routing outcome, not a thrown error,
+   * so the application's error handler never sees one and never has to discriminate.
    *
-   * @param errorHandler - Custom error handler function
+   * @param notFoundHandler - Handler that produces the 404 response
+   */
+  public onNotFound(notFoundHandler: HonoNotFoundHandler) {
+    this.hasNotFoundHandler = true;
+
+    this.app.notFound(async (context) => {
+      const wrapper = new HonoContextWrapper(context, this.server);
+
+      try {
+        const response = await notFoundHandler(wrapper, {
+          path: context.req.path,
+          method: context.req.method,
+        });
+
+        if (response instanceof Response) {
+          // The application answered its own 404 - it already knows about the request.
+          return response;
+        }
+      } catch (error) {
+        // onNotFound must not be able to take the server down, and it is deliberately NOT
+        // routed to onError - that hook is for errors the application threw itself.
+        this.logger.error('onNotFound threw an error, using the default response:', error);
+      }
+
+      return this.defaultNotFoundResponse(context.req.path, context.req.method);
+    });
+  }
+
+  /**
+   * The 404 both adapters answer when no `onNotFound` is registered, and the log line that goes
+   * with it.
+   *
+   * Hono's own default is `text/plain`, so the same application used to produce a different
+   * body depending on which adapter it ran under - the specific complaint that started this
+   * work. Registered unconditionally in `start()` so the default holds even for an app with
+   * no config at all.
+   *
+   * `info`, not `warn`: a scanner walking /wp-admin, /.env and /phpmyadmin must not be able to
+   * fill the warning stream. Not `debug` either - a 404 nobody can see is how a mistyped route
+   * survives to production. Only reached when the framework is the one answering, so an
+   * application that shaped its own 404 gets no line from here.
+   */
+  private defaultNotFoundResponse(path: string, method: string): Response {
+    if (this.logErrors !== false) {
+      this.logger.info('Route not found:', { path, method, status: 404 });
+    }
+
+    return new Response(JSON.stringify({ error: 'Not Found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  /**
+   * Registers the application's global error handler.
+   *
+   * Every error the application throws is offered to it first, `HTTPException` included, so an
+   * application can reshape its own 401/403/429 envelopes rather than only the 500s. Returning
+   * nothing means "not mine, use the default" - the framework then answers, and logs.
+   *
+   * @param errorHandler - Handler that produces the response for a thrown error
    *
    * @example
    * ```typescript
    * adapter.onError((error, context) => {
-   *   // HTTPException handling (optional custom behavior)
-   *   if (error instanceof HTTPException) {
-   *     // Add custom logging or return custom response
-   *     return context.send({ custom: 'response' }, error.status);
+   *   if (isHttpException(error)) {
+   *     return context.send({ error: error.message }, error.status);
    *   }
    *
-   *   // Other errors
    *   return context.send({ error: 'Internal error' }, 500);
    * });
    * ```
@@ -316,54 +421,93 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     this.hasErrorHandler = true;
 
     this.app.onError((error, context) => {
-      // Log error with full details
-      this.logger.error('Application error occurred:', {
-        message: error.message,
-        stack: error.stack,
-        path: context.req.path,
-        method: context.req.method,
-        timestamp: new Date().toISOString(),
-      });
-
       // Wrap context for user handler
       const wrapper = new HonoContextWrapper(context, this.server);
 
-      // Handle HTTPException with Hono's standard pattern
-      if (error instanceof HTTPException) {
-        try {
-          // Allow user to customize HTTPException handling
-          const customResponse = errorHandler(error, wrapper);
-
-          // If user returned a response, use it
-          if (customResponse) {
-            return customResponse;
-          }
-        } catch (handlerError) {
-          // User handler failed, log and fallback to HTTPException's default response
-          this.logger.error('Error handler threw an error for HTTPException, using default response:', handlerError);
-        }
-
-        // Return HTTPException's default response (proper status code + message)
-        return error.getResponse();
-      }
-
-      // Handle other errors through user-defined handler
       try {
-        return errorHandler(error, wrapper);
-      } catch (handlerError) {
-        // Fallback if error handler itself throws
-        this.logger.error('Error handler threw an error:', handlerError);
+        const customResponse = errorHandler(error, wrapper);
 
-        return context.json(
-          {
-            error: 'Internal server error',
-            message: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : error.message,
-            timestamp: new Date().toISOString(),
-          },
-          500,
-        );
+        // A handler that returns nothing is saying "not mine, use the default" - the contract
+        // ergenecore's `respondToError` already implements. Passing `undefined` straight to Hono
+        // made Bun answer **200** with its "Welcome to Bun!" placeholder, so a failed request was
+        // reported to the client, and to every uptime monitor in front of it, as a success.
+        if (customResponse) {
+          // The application answered. Its handler is where this error gets recorded, with
+          // whatever correlation id the application carries - a second line from the adapter
+          // would only duplicate it.
+          return customResponse;
+        }
+      } catch (handlerError) {
+        // The application's handler failed. Fall through to the default response.
+        this.logger.error('Error handler threw an error, using the default response:', handlerError);
       }
+
+      return this.defaultErrorResponse(error, context.req.path, context.req.method);
     });
+  }
+
+  /**
+   * The response the framework itself answers with, and the log line that goes with it.
+   *
+   * Reached when the application declared no `onError`, when its handler declined by returning
+   * nothing, or when the handler threw. All three mean the framework is producing the response,
+   * so it is the framework that has to record what happened - otherwise an `onError` that
+   * returns `undefined` swallows a 500 with no trace anywhere.
+   *
+   * The body is the same one `@asenajs/ergenecore` answers. It used to be `text/plain` for an
+   * application with no config and `{error, message, timestamp}` for one whose handler declined,
+   * so the same failure produced three different envelopes across the two adapters.
+   */
+  private defaultErrorResponse(error: Error, path: string, method: string): Response {
+    this.logHandledError(error, path, method);
+
+    if (error instanceof HTTPException) {
+      return error.getResponse();
+    }
+
+    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  /**
+   * Logs an error that is about to be handed to the application's error handler.
+   *
+   * The level is derived from the status the client will actually see: a 4xx is the
+   * caller's mistake and the auth/validation layer doing its job, so it must not flood the
+   * ERROR stream with stack traces - an unauthenticated request would otherwise be an
+   * attacker-controlled log amplifier. Only 5xx carries a stack, because that is the class
+   * of failure nobody predicted.
+   *
+   * `ServerLogger.debug` is optional, so fall back to `info` when an implementation does
+   * not provide it.
+   */
+  private logHandledError(error: Error, path: string, method: string): void {
+    if (this.logErrors === false) return;
+
+    const status = typeof (error as { status?: unknown }).status === 'number' ? (error as any).status : 500;
+    const isServerError = status >= 500;
+
+    const meta = {
+      message: error.message,
+      path,
+      method,
+      status,
+      ...(isServerError ? { stack: error.stack } : {}),
+    };
+
+    if (isServerError) {
+      this.logger.error('Application error occurred:', meta);
+
+      return;
+    }
+
+    // `debug` is optional on ServerLogger, and older @asenajs/asena typings do not declare
+    // it at all - read it structurally and fall back to info.
+    const debug = (this.logger as { debug?: (message: string, meta?: any) => void }).debug;
+
+    (debug ?? this.logger.info).call(this.logger, 'Request rejected:', meta);
   }
 
   public async serveOptions(options: () => Promise<AsenaServeOptions> | AsenaServeOptions) {
@@ -543,7 +687,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           // value is a classic ZodError.
           const { error } = result as unknown as { error: ZodError };
 
-          return this.handleValidationFailure(error, key, c);
+          return this.handleValidationFailure(error, key);
         });
 
         validators.push(validator);
@@ -562,21 +706,18 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   /**
    * @description Answer a failed validation.
    *
-   * Throws a `ValidationError` so the failure travels the same path as every other
-   * error and reaches `ConfigService.onError`, which is what the documentation has
-   * always described. When the application defines no error handler Hono would turn
-   * a thrown error into a bare 500, so the adapter's own 400 envelope stays as the
-   * fallback and those applications see no change at all.
+   * Throws a `ValidationError` so the failure travels the same path as every other error and
+   * reaches `ConfigService.onError`, which is what the documentation has always described.
+   *
+   * The adapter used to answer its own 400 here when no error handler was configured, which made
+   * a validation failure the one 4xx that reached neither `onError` nor the log. That envelope
+   * did not disappear with the branch - it moved onto `ValidationError.getResponse()`, which
+   * `defaultErrorResponse` falls back to.
    * @param {ZodError} error - The Zod failure
    * @param {string} target - Which part of the request failed
-   * @param {Context} context - The Hono context
-   * @returns {Response} The fallback response, when no error handler is configured
+   * @returns {never} Always throws
    */
-  private handleValidationFailure(error: ZodError, target: string, context: Context): Response {
-    if (!this.hasErrorHandler) {
-      return context.json({ error: 'Validation failed', details: flattenError(error), target }, 400);
-    }
-
+  private handleValidationFailure(error: ZodError, target: string): never {
     throw new ValidationError(error, target);
   }
 
@@ -652,83 +793,16 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
-   * Extracts base path from a route path
-   * Examples:
-   * - "/api/users/:id" -> "/api/users"
-   * - "/users" -> "/users"
-   * - "/" -> "/"
-   */
-  private extractBasePath(path: string): string {
-    // Remove trailing slash
-    const normalized = path.endsWith('/') && path !== '/' ? path.slice(0, -1) : path;
-
-    // Find the last segment without parameters
-    const segments = normalized.split('/');
-    const baseSegments = [];
-
-    for (const segment of segments) {
-      if (segment.startsWith(':') || segment.includes('*')) {
-        break;
-      }
-
-      baseSegments.push(segment);
-    }
-
-    return baseSegments.join('/') || '/';
-  }
-
-  /**
-   * Groups routes by their base path
-   * Returns a map of base path -> routes with that base path
-   */
-  private groupRoutesByBasePath(
-    routes: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[],
-  ): Map<string, RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[]> {
-    const groups = new Map<string, RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[]>();
-
-    for (const route of routes) {
-      const basePath = this.extractBasePath(route.path);
-
-      if (!groups.has(basePath)) {
-        groups.set(basePath, []);
-      }
-
-      groups.get(basePath).push(route);
-    }
-
-    return groups;
-  }
-
-  /**
-   * Finds common middlewares across all routes in a group
-   * Returns middlewares that appear in ALL routes
-   */
-  private extractCommonMiddlewares(
-    routes: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[],
-  ): BaseMiddleware<HonoAdapterContext>[] {
-    if (routes.length === 0) return [];
-
-    if (routes.length === 1) return [];
-
-    // Get middleware from first route
-    const firstRouteMiddlewares = routes[0].middlewares || [];
-
-    // Find middlewares that exist in all routes
-
-    return firstRouteMiddlewares.filter((middleware) => {
-      return routes.every((route) => {
-        return (route.middlewares || []).some((mw) => {
-          // Compare by constructor name (class identity)
-          return mw.constructor.name === middleware.constructor.name;
-        });
-      });
-    });
-  }
-
-  /**
-   * Registers routes to Hono app with optimization
-   * Groups routes by base path and applies common middlewares at group level
-   * Also registers WebSocket routes
+   * Sorts the queued routes and registers each one with its own middlewares.
+   *
+   * There used to be a "common middleware" optimisation here: routes sharing a base path were
+   * mounted on a sub-app and the middlewares they had in common were hoisted to `group.use('*')`.
+   * It compared middlewares with `mw.constructor.name`, but by this point a middleware is the
+   * plain `{ handle, override }` literal PrepareMiddlewareService builds - so the name was
+   * `"Object"` for every one of them and the comparison was always true. Every route in a group
+   * got the *first* route's middlewares and had its own filtered away, which silently swapped
+   * authorisation guards between sibling routes. Measured at 100 routes it bought nothing, so
+   * it is gone rather than repaired.
    */
   private async optimizeAndRegisterRoutes(): Promise<void> {
     // Register HTTP routes
@@ -739,25 +813,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       // @see routePriority.ts for the segment-based comparison algorithm.
       this.routeQueue.sort((a, b) => compareRoutePriority(a.path, b.path));
 
-      // Group routes by base path
-      const routeGroups = this.groupRoutesByBasePath(this.routeQueue);
-
-      // Sort groups by the same priority algorithm to ensure correct inter-group order
-      const sortedGroups = [...routeGroups.entries()].sort(([a], [b]) => compareRoutePriority(a, b));
-
-      for (const [basePath, routes] of sortedGroups) {
-        // Find common middlewares for this group
-        const commonMiddlewares = this.extractCommonMiddlewares(routes);
-
-        if (routes.length > 1 && commonMiddlewares.length > 0) {
-          // Multiple routes with common middlewares - use grouping
-          await this.registerRouteGroup(basePath, commonMiddlewares, routes);
-        } else {
-          // Single route or no common middlewares - register individually
-          for (const route of routes) {
-            await this.registerRouteDirect(route);
-          }
-        }
+      for (const route of this.routeQueue) {
+        await this.registerRouteDirect(route);
       }
     }
 
@@ -845,90 +902,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
       await next(); // Failed
     });
-  }
-
-  /**
-   * Registers a group of routes with common middlewares at base path level
-   */
-  private async registerRouteGroup(
-    basePath: string,
-    commonMiddlewares: BaseMiddleware<HonoAdapterContext>[],
-    routes: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[],
-  ): Promise<void> {
-    // Create grouped Hono instance
-
-    const group = new Hono({ strict: this._strict });
-
-    // Global middlewares are registered at top level via registerGlobalMiddlewaresTopLevel()
-
-    // Apply common middlewares to the entire group
-    const preparedCommonMiddlewares = this.prepareMiddlewares(commonMiddlewares);
-
-    if (preparedCommonMiddlewares.length > 0) {
-      group.use('*', ...preparedCommonMiddlewares);
-    }
-
-    // Method map for group
-    const groupMethodMap = {
-      [HttpMethod.GET]: (path: string, ...handlers: any[]) => (group as any).get(path, ...handlers),
-      [HttpMethod.POST]: (path: string, ...handlers: any[]) => (group as any).post(path, ...handlers),
-      [HttpMethod.PUT]: (path: string, ...handlers: any[]) => (group as any).put(path, ...handlers),
-      [HttpMethod.DELETE]: (path: string, ...handlers: any[]) => (group as any).delete(path, ...handlers),
-      [HttpMethod.PATCH]: (path: string, ...handlers: any[]) => (group as any).patch(path, ...handlers),
-      [HttpMethod.OPTIONS]: (path: string, ...handlers: any[]) => (group as any).options(path, ...handlers),
-      [HttpMethod.CONNECT]: (path: string, ...handlers: any[]) =>
-        (group as any).on([HttpMethod.CONNECT.toUpperCase()], path, ...handlers),
-      // HEAD is handled automatically by Hono via GET routes (HTTP spec: HEAD = GET without body).
-      [HttpMethod.HEAD]: (path: string, ...handlers: any[]) => (group as any).get(path, ...handlers),
-      [HttpMethod.TRACE]: (path: string, ...handlers: any[]) =>
-        (group as any).on([HttpMethod.TRACE.toUpperCase()], path, ...handlers),
-    };
-
-    // Register each route in the group
-    for (const route of routes) {
-      // Remove common middlewares from route middlewares
-      const uniqueMiddlewares = (route.middlewares || []).filter(
-        (mw) => !commonMiddlewares.some((common) => common.constructor.name === mw.constructor.name),
-      );
-
-      const preparedMiddlewares = this.prepareMiddlewares(uniqueMiddlewares);
-      const validators = route.validator ? await this.prepareValidator(route.validator) : [];
-      const allMiddlewares = [...validators, ...preparedMiddlewares];
-
-      const methodHandler =
-        groupMethodMap[route.method] ??
-        ((path: string, ...handlers: any[]) => (group as any).on([route.method.toUpperCase()], path, ...handlers));
-
-      // Calculate relative path
-      let relativePath = route.path;
-
-      if (route.path.startsWith(basePath) && basePath !== '/') {
-        relativePath = route.path.slice(basePath.length);
-      }
-
-      if (!relativePath.startsWith('/')) {
-        relativePath = '/' + relativePath;
-      }
-
-      // Normalize path for Hono trailing slash compatibility
-      const normalizedRelativePath = this.normalizePath(relativePath);
-
-      // Register to group
-      if (route.staticServe) {
-        methodHandler(
-          normalizedRelativePath,
-          ...allMiddlewares,
-          serveStatic(this.prepareStaticServeOptions(route.staticServe)),
-        );
-      } else {
-        const handler = this.prepareHandler(route.handler);
-
-        methodHandler(normalizedRelativePath, ...allMiddlewares, handler);
-      }
-    }
-
-    // Mount group to main app (normalize basePath too)
-    this.app.route(this.normalizePath(basePath), group);
   }
 
   /**

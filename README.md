@@ -1,5 +1,8 @@
 # Asena Hono Adapter
 
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
+[![Bun Version](https://img.shields.io/badge/Bun-1.3.12%2B-blueviolet)](https://bun.sh)
+
 HTTP and WebSocket adapter implementation based on Hono web framework for Asena.js.
 
 ## Features
@@ -112,7 +115,11 @@ describe("YourController", () => {
   let baseUrl;
   
   beforeEach(async () => {
-    const port = Math.floor(Math.random() * 55000) + 10000;
+    // 10000-31999: below the kernel's ephemeral floor (net.ipv4.ip_local_port_range,
+    // 32768-60999). A server port drawn from that range collides with the outbound
+    // sockets the suite itself holds open - TIME_WAIT included - and Bun.serve then
+    // fails with EADDRINUSE, randomly, in whichever test happened to draw it.
+    const port = 10000 + Math.floor(Math.random() * 22000);
     const [adapter, logger] = createHonoAdapter(new DefaultLogger());
     const app = new AsenaServer(adapter).logger(logger).port(port);
     

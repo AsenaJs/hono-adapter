@@ -1,5 +1,167 @@
 # @asenajs/hono-adapter
 
+## 2.0.0
+
+### Major Changes
+
+- Route middlewares no longer leak between sibling routes, plus a dedicated `onNotFound` hook
+
+  ## Route middlewares were swapped between routes sharing a base path
+
+  **This is a privilege-escalation class bug — upgrade if you use route-level `middlewares`.**
+
+  The adapter hoisted "common" middlewares to a group-level `use('*')` and filtered them out of
+  each individual route. Both steps compared middlewares with `mw.constructor.name`, but by the
+  time a middleware reaches an adapter it is the plain `{ handle, override }` object
+  `PrepareMiddlewareService` builds — so the name was `"Object"` for every one of them and the
+  comparison was always true. Every route in a group ran the _first_ route's middlewares and had
+  its own removed:
+
+  ```typescript
+  @Controller('/users')
+  class UserController {
+    @Get({ path: '/:id', middlewares: [ReadGuard] }) get(c) {}
+    @Delete({ path: '/:id', middlewares: [AdminGuard] }) remove(c) {}
+  }
+  // DELETE /users/:id ran ReadGuard. AdminGuard never ran.
+  ```
+
+  It triggered whenever two or more routes shared a base path _and_ each carried at least one
+  route-level middleware, and it was completely silent. The grouping optimisation is removed
+  rather than repaired: measured over 100 routes it made no difference to throughput, and every
+  route now registers with its own middlewares.
+
+  ## Breaking: `onError` no longer sees unmatched routes
+
+  They previously arrived as a synthetic error, so an application handler had to ask "was this
+  actually an error?" on every call. Routing has its own hook now:
+
+  ```typescript
+  @Config()
+  export class AppConfig extends ConfigService {
+    public onNotFound(context: Context, request: NotFoundRequest) {
+      return context.send({ title: 'Not Found', status: 404, instance: request.path }, 404);
+    }
+  }
+  ```
+
+  `NotFoundError` is removed. `request.path` and `request.method` match what ergenecore reports
+  for the same request, so the same handler body works on either adapter.
+
+  ## Breaking: a `@Page` path colliding with an API route now fails the boot
+
+  HTML routes are handed to `Bun.serve({ routes })`, which Bun checks **before** falling through to
+  Hono's `fetch` handler. A `@Page` registered on a path an HTTP route also serves therefore shadowed
+  it silently: the request answered `200` with the page, the API route was unreachable, and it still
+  appeared in the startup log as registered. The adapter now throws
+  `HTML route collision at "<path>": path already registered as an API or WebSocket route.` — the
+  same check, and the same message, `@asenajs/ergenecore` has always applied.
+
+  ## Breaking: the default 404 is JSON, not `text/plain`
+
+  Hono's built-in 404 answered `text/plain`, so the same application produced a different body
+  depending on which adapter it ran under — the portability complaint that started this work. With
+  no `onNotFound` declared the adapter now answers `{"error":"Not Found"}` with a 404, identical to
+  ergenecore. The handler is registered unconditionally, so this holds even for an app with no
+  config at all.
+
+  ## Errors no longer flood the error log
+
+  Errors were logged at `error` level with a full stack regardless of status, so ordinary
+  validation and auth rejections filled the error stream. 5xx still logs at `error` with a stack;
+  4xx logs at `debug` (falling back to `info` when the logger has none) without one. Pass
+  `logErrors: false` to `createHonoAdapter` when your own handler already logs with a correlation
+  id.
+
+  ## Breaking: the framework's default log now fires exactly when its default response fires
+
+  One rule, both adapters:
+
+  |          | the hook answered | no hook, or it declined or threw                         |
+  | -------- | ----------------- | -------------------------------------------------------- |
+  | response | yours             | the framework's                                          |
+  | log      | none              | 5xx `error` + stack · 4xx `debug` (→`info`) · 404 `info` |
+
+  An `onError` that returns nothing, or throws, used to lose the original error entirely while the
+  adapter answered its default — it is logged now. An `onError` that **does** answer no longer
+  produces an adapter line: your handler owns the response, so it owns the record, with whatever
+  correlation id you attach. There is no switch to force that line back on; `logErrors: false` only
+  silences further.
+
+  **An unmatched route is logged too**, at `info` — `Route not found:` with `{ path, method, status }`.
+  It produced no output at any level before, which is the one class of traffic (bots, probes, a typo
+  in a deployed client) an operator most needs to count. `info` rather than `warn` so a scanner
+  walking `/wp-admin`, `/.env` and `/phpmyadmin` cannot fill the warning stream, and rather than
+  `debug` because a 404 nobody can see is how a mistyped route survives to production. An
+  application that declared `onNotFound` and answered from it gets no line, same rule.
+
+  ## Breaking: one 500 body, matching ergenecore
+
+  The adapter answered three different envelopes for the same failure: `text/plain` `Internal Server
+Error` for an application with no config, `{"error":"Internal server error","message":"An unexpected
+error occurred","timestamp":…}` when a handler declined or threw, and ergenecore answered a third.
+  All of them are now `{"error":"Internal Server Error"}` with `Content-Type: application/json` —
+  identical to `@asenajs/ergenecore`, the same portability decision already taken for the 404.
+
+  ## Breaking: a validation failure travels one path, whoever answers it
+
+  `handleValidationFailure` answered its own `{error, details, target}` 400 when the application had
+  no `onError`, and threw a `ValidationError` otherwise. Returning a `Response` from inside the
+  validator middleware means it never throws, so that 400 reached neither `onError` nor the log — the
+  one 4xx an application could not see at any level. The branch is gone: the error is always thrown,
+  and the envelope moved onto `ValidationError.getResponse()`, so the body no longer depends on
+  whether an unrelated hook exists. An `onError` that declines used to get `HTTPException`'s bare
+  `Validation failed` text and now gets the full envelope.
+
+  **Breaking: an `onError` handler that returns nothing now falls back to the default 500.** The
+  handler's return value was passed straight to Hono, which requires a `Response` — so returning
+  `undefined`, the ordinary way to say _"not mine, use the default"_, made Bun answer **`200 OK`**
+  with its `Welcome to Bun!` placeholder page. A failed request was reported to the client, and to
+  every uptime monitor in front of it, as a success. `@asenajs/ergenecore` has always honoured that
+  contract; this adapter now does too.
+
+  **The fallback response no longer leaks the thrown message.** When the application's handler itself
+  threw, the response body carried
+  `process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : error.message` — and
+  `error` there is the _original_ error, not the handler's failure. The gate was the wrong control:
+  the leaking branch is the one `bun run`, `bun test` and every container that does not set the
+  variable take, which made the unsafe path the default and the safe path the branch nobody exercised
+  while developing. The generic string is now unconditional.
+
+  **That logging now happens whether or not your application declares `onError`.** The handler was
+  previously registered only when a config declared the hook, so an application with no `@Config` —
+  or one declaring only `onNotFound` — answered a 500 and wrote nothing to the framework logger:
+  Hono's built-in handler printed a bare stack to stderr with no path, method or status, `logErrors:
+false` could not suppress it, and a 4xx produced no output at all.
+
+  Hono's own `HTTPException` is now branded with `HTTP_EXCEPTION` when the adapter is
+  constructed, so `isHttpException()` from `@asenajs/asena/adapter` recognises it. Without that,
+  the documented `if (isHttpException(error)) … else 500` pattern answered **500 for every
+  deliberate 401/403/404/429** on this adapter.
+
+  ::: warning The brand does not cross two copies of `hono`
+  It is installed on the `HTTPException.prototype` of the copy **this adapter** resolved, so an
+  exception thrown from a second, separately-resolved copy of `hono` is not branded and
+  `isHttpException()` answers `false` for it — exactly as `instanceof` would. Branding one
+  prototype cannot reach another copy's class. The brand's job is to make `isHttpException()` work
+  at all on this adapter in an ordinary single-copy install.
+
+  `hono` is a regular **dependency** of this adapter, not a peer, so an application that also
+  depends on `hono` directly can resolve a second copy — and that is the ordinary case, because
+  `hono/http-exception` is where `HTTPException` is documented. **Import it from
+  `@asenajs/hono-adapter` instead**, and you stay on the copy the adapter branded. Otherwise
+  deduplicate `hono` in your lockfile.
+
+  (`@asenajs/ergenecore` is unaffected: its `HttpException` carries the brand as an instance field
+  under a registered symbol, which does survive across copies.)
+  :::
+
+  `ConfigService` declares its hooks (`onError`, `onNotFound`, `serveOptions`, `globalMiddlewares`,
+  `transport`) through declaration merging. They stay optional, but an override with the wrong
+  signature is now a compile error instead of a hook the framework silently never calls.
+
+  Requires `@asenajs/asena` 0.9.0 or later.
+
 ## 1.7.0
 
 ### Minor Changes

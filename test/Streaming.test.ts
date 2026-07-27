@@ -9,7 +9,8 @@ const createMockLogger = (): ServerLogger => ({
   info: () => {},
   warn: () => {},
   error: () => {},
-  // @ts-ignore
+  // Required by ServerLogger and called during bootstrap - it was missing here.
+  profile: () => {},
   debug: () => {},
 });
 

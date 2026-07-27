@@ -8,10 +8,7 @@ export const createHonoAdapter = (
   if (loggerOrOptions && typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions) {
     const logger = loggerOrOptions.logger;
 
-    return [
-      new HonoAdapter(loggerOrOptions as HonoAdapterOptions),
-      logger,
-    ];
+    return [new HonoAdapter(loggerOrOptions as HonoAdapterOptions), logger];
   }
 
   const logger = loggerOrOptions as ServerLogger;

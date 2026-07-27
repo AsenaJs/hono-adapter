@@ -431,8 +431,10 @@ export class RateLimiterMiddleware extends MiddlewareService {
    */
   private defaultKeyGenerator(context: Context): string {
     const req = context.req as any;
-    const forwarded = typeof req.header === 'function' ? req.header('x-forwarded-for') : context.headers?.['x-forwarded-for'];
-    const cfIp = typeof req.header === 'function' ? req.header('cf-connecting-ip') : context.headers?.['cf-connecting-ip'];
+    const forwarded =
+      typeof req.header === 'function' ? req.header('x-forwarded-for') : context.headers?.['x-forwarded-for'];
+    const cfIp =
+      typeof req.header === 'function' ? req.header('cf-connecting-ip') : context.headers?.['cf-connecting-ip'];
 
     return forwarded || cfIp || context.getRequestIp?.() || 'unknown';
   }

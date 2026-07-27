@@ -1,6 +1,13 @@
 import type { Server } from 'bun';
 import type { Context, HonoRequest } from 'hono';
-import type { AsenaContext, AsenaSSEStreamWriter, AsenaStreamWriter, AsenaVariables, CookieExtra, SendOptions } from '@asenajs/asena/adapter';
+import type {
+  AsenaContext,
+  AsenaSSEStreamWriter,
+  AsenaStreamWriter,
+  AsenaVariables,
+  CookieExtra,
+  SendOptions,
+} from '@asenajs/asena/adapter';
 import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } from 'hono/cookie'; // add delete cookie
 import { stream as honoStream, streamSSE as honoStreamSSE, streamText as honoStreamText } from 'hono/streaming';
 import type { SSEStreamingApi } from 'hono/streaming';
@@ -234,8 +241,15 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
 
   private wrapStreamingApi(honoStream: StreamingApi): AsenaStreamWriter {
     return {
-      write: (input: Uint8Array | string) => honoStream.write(input).then(() => {}),
-      writeln: (input: string) => honoStream.writeln(input).then(() => {}),
+      // Hono's write/writeln resolve to the StreamingApi itself for chaining, but
+      // AsenaStreamWriter promises `void`. Awaiting and returning nothing discards the value
+      // without the `.then(() => {})` that only looks like a forgotten callback body.
+      write: async (input: Uint8Array | string) => {
+        await honoStream.write(input);
+      },
+      writeln: async (input: string) => {
+        await honoStream.writeln(input);
+      },
       close: () => honoStream.close(),
       pipe: (body: ReadableStream) => honoStream.pipe(body),
       onAbort: (listener: () => void | Promise<void>) => honoStream.onAbort(listener),
