@@ -9,7 +9,7 @@
     "README.md",
     "LICENSE"
   ],
-  "version": "2.0.0",
+  "version": "3.0.0",
   "author": "LibirSoft",
   "repository": {
     "type": "git",
@@ -41,23 +41,26 @@
     "release": "bun run build && changeset publish"
   },
   "devDependencies": {
-    "@asenajs/asena": "^0.9.0",
+    "@asenajs/asena": "^0.10.0",
     "@changesets/cli": "^2.30.0",
     "@types/bun": "latest",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^9.1.2",
+    "hono": "^4.12.32",
     "prettier": "^3.8.1",
-    "typescript-eslint": "^8.58.0"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.58.0",
+    "zod": "^4.3.6"
   },
   "peerDependencies": {
-    "@asenajs/asena": "^0.9.0",
-    "typescript": "^5.8.2"
+    "@asenajs/asena": "^0.10.0",
+    "hono": ">=4.12.9",
+    "typescript": "^5.8.2",
+    "zod": "^4.3.6"
   },
   "dependencies": {
-    "@hono/zod-validator": "^0.9.0",
-    "hono": "^4.12.9",
-    "zod": "^4.3.6"
+    "@hono/zod-validator": "^0.9.0"
   }
 }

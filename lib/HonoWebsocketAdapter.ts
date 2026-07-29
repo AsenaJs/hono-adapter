@@ -46,10 +46,27 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
   }
 
   /**
-   * Graceful shutdown - closes all connections
-   * @param _timeoutMs - Timeout for graceful shutdown (default: 5000)
+   * Releases everything this adapter owns: heartbeat timers, connection tracking, and the
+   * transport.
+   *
+   * The transport is the part that matters beyond a single process. `BunLocalTransport` has
+   * nothing to let go of, but a remote one holds broker state - `RedisTransport` keeps a
+   * subscriber connection with a live channel subscription plus a publisher - and `destroy()`
+   * had no call site anywhere in the framework, so every stop leaked both. A test suite doing
+   * twenty stop/start cycles, or a pod restarting under a rolling deploy, accumulates them until
+   * the broker refuses new clients.
+   *
+   * This method does **not** close sockets, despite the name it has carried since the first
+   * version. Closing them is `server.stop(closeActiveConnections)`'s job, and `HonoAdapter.stop()`
+   * has already done it by the time this runs; a second pass from here would only race with Bun.
+   * Called standalone, it leaves open connections alone - it just stops pinging them.
+   *
+   * @param timeoutMs - Ceiling for the transport teardown (default: 5000). A remote transport's
+   *   `destroy()` is network I/O, and the pod being shut down is often precisely the one that
+   *   cannot reach the broker - without a bound, one unreachable Redis holds the entire shutdown
+   *   open indefinitely.
    */
-  public async shutdown(_timeoutMs = 5000): Promise<void> {
+  public async shutdown(timeoutMs = 5000): Promise<void> {
     this.logger.info('Starting WebSocket graceful shutdown...');
 
     // Stop all heartbeats
@@ -58,7 +75,51 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
     // Clear connection tracking
     this.activeConnections.clear();
 
+    await this.destroyTransport(timeoutMs);
+
     this.logger.info('WebSocket shutdown complete');
+  }
+
+  /**
+   * Runs the transport's `destroy()` under a ceiling, containing every failure.
+   *
+   * A transport that throws or hangs must not abort the rest of the shutdown - the same policy
+   * the core applies to `@OnStop` hooks, and for the same reason: a shutdown that gives up
+   * halfway leaves more behind than one that limps to the end. The timer is cleared on the happy
+   * path too, so a fast teardown is not held up by a pending timeout.
+   *
+   * The transport reference is kept rather than cleared. Dropping it would silently downgrade a
+   * restarted server to `BunLocalTransport`, and every remote `destroy()` in the ecosystem is
+   * already idempotent.
+   *
+   * @param timeoutMs - Ceiling in milliseconds
+   */
+  private async destroyTransport(timeoutMs: number): Promise<void> {
+    const transport = this._transport;
+
+    if (typeof transport?.destroy !== 'function') {
+      return;
+    }
+
+    let timer: Timer | undefined;
+
+    try {
+      await Promise.race([
+        transport.destroy(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`WebSocket transport destroy() did not finish within ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } catch (error) {
+      this.logger.error('WebSocket transport teardown failed, continuing shutdown:', error);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   public registerWebSocket(webSocketService: AsenaWebSocketService<any>): void {

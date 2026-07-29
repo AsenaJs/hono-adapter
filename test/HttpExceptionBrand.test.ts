@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { HTTPException } from 'hono/http-exception';
-import { isHttpException, HTTP_EXCEPTION } from '@asenajs/asena/adapter';
+import { isHttpException, HTTP_EXCEPTION, HttpException } from '@asenajs/asena/adapter';
 import { HonoAdapter } from '../lib/HonoAdapter';
 import { ValidationError } from '../lib/errors';
 import type { ServerLogger } from '@asenajs/asena/logger';
@@ -13,12 +13,14 @@ const mockLogger: ServerLogger = {
 };
 
 /**
- * Byte-for-byte the same contract as `ergenecore/test/HttpExceptionBrand.test.ts`.
+ * The same contract as `ergenecore/test/HttpExceptionBrand.test.ts`, plus the cases that only
+ * exist here.
  *
- * The class users throw on this adapter is Hono's own `HTTPException`, which this package does
- * not own and therefore cannot declare the brand on. `brandHonoHttpException()` puts it on the
- * prototype from the adapter constructor. `hono` is a *peer* dependency, so two copies of it are
- * more likely here than two copies of the adapter - exactly the case the brand exists for.
+ * Applications throw `HttpException` from `@asenajs/asena/adapter`. Hono's ecosystem throws
+ * `HTTPException`, a class this package does not own and therefore cannot declare the brand on -
+ * `brandHonoHttpException()` puts it on the prototype from the adapter constructor. `hono` is a
+ * regular dependency here, but applications routinely depend on it directly as well, so a second
+ * resolved copy is ordinary rather than exotic - exactly the case the brand exists for.
  */
 describe('HttpException brand (hono)', () => {
   test("Hono's own HTTPException is branded once the adapter is constructed", () => {
@@ -46,8 +48,8 @@ describe('HttpException brand (hono)', () => {
     expect(isHttpException(new ValidationError({ issues: [] } as any, 'json'))).toBe(true);
   });
 
-  // The case the brand exists for: `hono` is a peer dependency, so a second resolved copy is
-  // plausible and `error instanceof HTTPException` answers false for it. The predicate must
+  // The case the brand exists for: an application depending on `hono` directly can resolve a
+  // second copy, and `error instanceof HTTPException` answers false for it. The predicate must
   // still recognise it, or the documented `if (isHttpException(error)) … else 500` pattern
   // turns every deliberate 401/403/404 into a generic 500.
   test('recognises an HTTPException from a second copy of hono', () => {
@@ -79,5 +81,43 @@ describe('HttpException brand (hono)', () => {
     expect(isHttpException(new Error('nope'))).toBe(false);
     expect(isHttpException(null)).toBe(false);
     expect(isHttpException({ [HTTP_EXCEPTION]: false })).toBe(false);
+  });
+
+  // Two throwable, branded classes now reach an application running on this adapter: the portable
+  // one from `@asenajs/asena/adapter`, and hono's own, which its ecosystem middlewares throw.
+  // `isHttpException` covers both and is the reason an application does not have to care which it
+  // is holding. `instanceof` does care, and these are the assertions that say so out loud.
+  describe("the core class and hono's are both branded, and are not each other", () => {
+    test('the core class is branded', () => {
+      // eslint-disable-next-line no-new
+      new HonoAdapter(mockLogger);
+
+      expect(isHttpException(new HttpException(401, 'Unauthorized'))).toBe(true);
+    });
+
+    test("the core class is not hono's HTTPException", () => {
+      expect(new HttpException(401, 'Unauthorized') instanceof HTTPException).toBe(false);
+    });
+
+    test("ValidationError extends hono's, not the core class", () => {
+      // Deliberate: an existing handler branching on `instanceof HTTPException` keeps answering
+      // 400 for a validation failure. It is also why `instanceof` is the wrong tool here - the
+      // two branded classes sort differently under it and identically under the guard.
+      const error = new ValidationError({ issues: [] } as any, 'json');
+
+      expect(error instanceof HTTPException).toBe(true);
+      expect(error instanceof HttpException).toBe(false);
+      expect(isHttpException(error)).toBe(true);
+    });
+
+    test('this package does not export the core class under a confusable name', async () => {
+      const exports = await import('../index');
+
+      // `HttpException` and `HTTPException` differ by the case of two letters. Only hono's is
+      // exported from here; the portable one comes from `@asenajs/asena/adapter`, so autocomplete
+      // in a hono project cannot silently offer the wrong one.
+      expect('HTTPException' in exports).toBe(true);
+      expect('HttpException' in exports).toBe(false);
+    });
   });
 });

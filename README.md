@@ -1,6 +1,6 @@
 # Asena Hono Adapter
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
 [![Bun Version](https://img.shields.io/badge/Bun-1.3.12%2B-blueviolet)](https://bun.sh)
 
 HTTP and WebSocket adapter implementation based on Hono web framework for Asena.js.
@@ -18,14 +18,27 @@ HTTP and WebSocket adapter implementation based on Hono web framework for Asena.
 ## Requirements
 
 - [Bun](https://bun.sh) v1.3.12 or higher
+- [@asenajs/asena](https://github.com/AsenaJs/Asena) v0.10.0 or higher (peer dependency)
+- [Hono](https://hono.dev) v4.12.9 or higher (peer dependency)
+- [Zod](https://zod.dev) v4.3.6 or higher (peer dependency)
 - TypeScript v5.8.2 or above
 
 ## Installation
 
-1. Install with NPM package manager:
 ```bash
-bun add @asenajs/hono-adapter
+bun add @asenajs/hono-adapter hono zod
 ```
+
+`hono` and `zod` are **peer dependencies** - this adapter offers the wrapper, your project owns the
+libraries it wraps. That is what keeps your code and the adapter on a single copy of `hono`; two
+copies mean two `HTTPException` classes, and a deliberate 403 thrown from the wrong one is answered
+500.
+
+| Package manager | Command |
+|:--|:--|
+| bun, npm 7+, pnpm 8+ | `bun add hono zod` — peers auto-install, but declare them anyway so they survive a clean install |
+| yarn 1 | `yarn add hono zod` — **required**, yarn 1 does not install peers for you |
+
 
 ## Usage
 

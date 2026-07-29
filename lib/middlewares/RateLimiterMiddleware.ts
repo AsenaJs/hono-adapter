@@ -48,6 +48,7 @@
  */
 
 import { type Context, MiddlewareService } from '../defaults';
+import { OnStop } from '@asenajs/asena/decorators/ioc';
 
 /**
  * Token bucket for a single client
@@ -396,14 +397,29 @@ export class RateLimiterMiddleware extends MiddlewareService {
   }
 
   /**
-   * Cleanup resources (stop cleanup timer)
+   * Cleanup resources (stop cleanup timer, drop bucket state)
    *
-   * Call this when shutting down the application.
+   * `@OnStop` hands this to the component lifecycle, so `server.stop()` calls it instead of the
+   * application having to remember to. The hook is inherited, so the `@Middleware()` subclass
+   * users actually register gets it without repeating the decorator - and it only fires for
+   * singletons, which is what a rate limiter has to be to share one bucket map across requests.
+   *
+   * The timer is `unref()`'d, so it never held the process open. What it does do is survive a
+   * stop/start cycle *inside* one process - twenty of them is an ordinary test suite - leaving a
+   * timer per stopped server still sweeping a bucket map nobody reads. The buckets go with it:
+   * a restarted server must not inherit the rate-limit state of the one before it, or the first
+   * requests after a restart get counted against a window that has already closed.
+   *
+   * Safe to call twice; the second call has nothing left to do.
    */
+  @OnStop()
   public destroy(): void {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
     }
+
+    this.buckets.clear();
   }
 
   /**
