@@ -1,5 +1,91 @@
 # @asenajs/hono-adapter
 
+## 3.0.0
+
+### Major Changes
+
+- `hono` and `zod` are now peer dependencies
+
+  The adapter's job is to offer a wrapper, not to supply the framework it wraps. Both libraries are
+  part of the contract between this package and your application - `HTTPException` and `Context` come
+  from hono, `ValidationService.json()` returns a zod schema, and all of them appear in the published
+  `.d.ts` - so both must be the _same copy_ your application resolves. Declaring them as
+  `dependencies` gave this package its own resolution slot, and that slot is a bug waiting for a
+  lockfile to fill it.
+
+  It did. A downstream application bumped `hono: ^4.12.9 -> ^4.12.32`, bun kept the adapter's
+  already-satisfied copy nested under `@asenajs/hono-adapter/node_modules/hono`, and every deliberate
+  400/403 thrown from `hono/http-exception` silently became a 500 while the API kept answering. 46/46
+  of that app's tests stayed green. `brandHonoHttpException()` patches the prototype of the copy _this
+  package_ resolved; a prototype patch cannot reach another copy's class. The split was not even
+  semver-forced - `4.12.32` satisfied `^4.12.9` too. Only the extra resolution slot made it possible.
+
+  ## Migration
+
+  ```bash
+  bun add hono zod
+  rm -rf node_modules bun.lock && bun install
+  ```
+
+  The `rm -rf` is not optional when upgrading in place. A previous `bun install` has been observed to
+  drop the nested copy from the lockfile while **leaving the directory on disk**, and two directories
+  are two classes regardless of whether the versions match.
+
+  | Package manager      | What you need to do                                                                                   |
+  | :------------------- | :---------------------------------------------------------------------------------------------------- |
+  | bun, npm 7+, pnpm 8+ | Peers auto-install, but declare them anyway - an undeclared peer disappears on the next clean install |
+  | yarn 1               | **Required.** yarn 1 does not install peers, so without this the server fails at boot                 |
+
+  ## Details
+  - Requires **hono >= 4.12.9** and **zod ^4.3.6**. `flattenError` is a zod-v4 top-level export and is
+    called at runtime, so zod 3 will not work.
+  - `hono` is declared as a floor (`>=4.12.9`) rather than a caret, deliberately: a peer range that
+    cannot be satisfied is the one remaining way to make npm or pnpm nest a second copy. A hono major
+    mismatch instead shows up as a type error in your build, because this package's `.d.ts` references
+    hono's types directly - which is loud, where a duplicate copy is silent.
+  - `@hono/zod-validator` remains a regular dependency. You never import it, it declares no
+    dependencies of its own, and its own hono/zod peers resolve to yours.
+  - The adapter now writes a startup warning if it finds itself resolving a `hono` nested under
+    `@asenajs/hono-adapter/node_modules/hono` - the one duplicate topology it can detect from the
+    inside, and the one a stale directory leaves behind.
+  - Nothing in the API changed.
+
+### Minor Changes
+
+- Answer `HttpException` from core, and derive the log level from the status the caller received
+
+  Applications can now throw `HttpException` from `@asenajs/asena/adapter` - the same class, and the
+  same throw, that works on `@asenajs/ergenecore`. Requires `@asenajs/asena` `>=0.9.2`; the peer
+  range moves to `^0.9.2`.
+
+  This package does **not** re-export it. It already exports hono's `HTTPException`, and two
+  throwable, branded classes whose names differ by the case of two letters is a trap for
+  autocomplete - only one of them is the portable one. Import `HttpException` from
+  `@asenajs/asena/adapter` and `HTTPException` from here.
+
+  **Hono's `HTTPException` is unaffected.** It is still exported, still branded, and still answered
+  first - by `instanceof`, deliberately, so that it does not depend on the prototype patch having
+  run. Everything `hono/basic-auth`, `hono/bearer-auth`, `hono/jwt` and hono's own validator throw
+  keeps working exactly as before, and there are now end-to-end tests pinning that.
+
+  Two fixes come with it:
+
+  - **A branded exception from a second resolved copy answered 500.** `defaultErrorResponse` chose
+    the response with `error instanceof HTTPException`, so anything branded but not an instance of
+    _this_ copy of hono's class fell through to the generic 500 - which is precisely the failure the
+    `HTTP_EXCEPTION` brand was introduced to prevent. It now checks the brand, and honours the
+    status even when the exception carries no `getResponse()`. The body is withheld in that case:
+    an exception the adapter does not recognise is not known to carry a message that is safe to
+    send to the caller.
+
+  - **The response and the log could disagree about the same request.** `logHandledError` derived
+    its level by duck-typing a numeric `.status` off the error, independently of how the response
+    was chosen. A plain `Error` carrying a stray `.status = 401` was answered 500 and logged at
+    debug as a 4xx; a branded foreign exception was answered 500 and logged as whatever status it
+    carried. Both now go through one `resolveErrorStatus`, so the logged status always equals the
+    answered status - asserted as an invariant rather than a list of expected values, so the two
+    cannot drift again.
+
 ## 2.0.0
 
 ### Major Changes

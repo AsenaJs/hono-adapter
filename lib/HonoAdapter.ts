@@ -10,6 +10,7 @@ import {
   type AsenaStartOptions,
   type BaseMiddleware,
   type BaseValidator,
+  isHttpException,
   type RouteParams,
   VALIDATOR_METHODS,
   type ValidatorHandler,
@@ -27,7 +28,7 @@ import { blue, green, red, type ServerLogger, yellow } from '@asenajs/asena/logg
 import { type Hook, zValidator } from '@hono/zod-validator';
 import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
 import type { ZodError, ZodType } from 'zod';
-import { brandHonoHttpException, ValidationError } from './errors';
+import { brandHonoHttpException, ValidationError, warnOnNestedHono } from './errors';
 import { middlewareParser } from './utils/middlewareParser';
 import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
@@ -73,9 +74,39 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     return path;
   }
 
+  /**
+   * Stops the HTTP surface and releases everything the adapter owns.
+   *
+   * The socket goes down first and the WebSocket adapter is torn down after it, for the same
+   * reason the core stops the adapter before running `@OnStop`: a transport has to outlive the
+   * things that publish through it. Destroying it while a message handler is still running would
+   * only turn a shutdown into an error in the log.
+   *
+   * `finally`, so the two failure directions are both covered - a `server.stop()` that rejects
+   * still releases the WebSocket resources, and a WebSocket teardown that fails cannot leave the
+   * port bound. A port that survives `stop()` is how a test suite starts failing with
+   * EADDRINUSE and how a rolling deploy keeps taking traffic it can no longer serve.
+   *
+   * @param closeActiveConnections - Whether to drop in-flight connections instead of draining them
+   */
   public async stop(closeActiveConnections = true): Promise<void> {
-    if (this.server) {
-      await this.server.stop(closeActiveConnections);
+    try {
+      if (this.server) {
+        await this.server.stop(closeActiveConnections);
+      }
+    } finally {
+      // Cast because `AsenaWebsocketAdapter` does not declare `shutdown()` - the constructor only
+      // ever accepts a HonoWebsocketAdapter, so the narrowing is the one the public API already
+      // guarantees.
+      const websocketAdapter = this.websocketAdapter as HonoWebsocketAdapter | undefined;
+
+      // Guarded rather than awaited bare: shutdown() already contains its own failures, but a
+      // throw from here would replace whatever `server.stop()` was reporting.
+      try {
+        await websocketAdapter?.shutdown();
+      } catch (error) {
+        this.logger.error('WebSocket shutdown failed during adapter stop:', error);
+      }
     }
   }
 
@@ -168,6 +199,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // Teach isHttpException() about Hono's own exception class. Doing it here rather than at
     // module scope keeps the side effect tied to actually using the adapter.
     brandHonoHttpException();
+
+    // ...and say so if that branding cannot possibly be enough, because `hono` resolved to a copy
+    // nested under this package rather than to the application's own.
+    warnOnNestedHono(this.logger);
   }
 
   /**
@@ -461,8 +496,30 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   private defaultErrorResponse(error: Error, path: string, method: string): Response {
     this.logHandledError(error, path, method);
 
+    // Hono's own class first, and deliberately by `instanceof` rather than by the brand. The brand
+    // reaches it only because `brandHonoHttpException()` patched the prototype from this class's
+    // constructor; if that call is ever removed, reordered, or defeated by `hono/http-exception`
+    // resolving to a second copy inside a middleware, every 401 from `hono/basic-auth`,
+    // `hono/bearer-auth`, `hono/jwt` and hono's own validator would silently answer 500. This arm
+    // costs one check and cannot be defeated that way.
     if (error instanceof HTTPException) {
       return error.getResponse();
+    }
+
+    if (isHttpException(error)) {
+      // The class from `@asenajs/asena/adapter` - the one applications throw on both adapters -
+      // and any foreign copy that still carries a way to build its own response.
+      if (typeof error.getResponse === 'function') {
+        return error.getResponse();
+      }
+
+      // Branded, but with nothing to build a response from. Only `status` is in the contract, so
+      // honour that and withhold the body: an exception this adapter does not recognise is not
+      // known to carry a message that is safe to send to the caller.
+      return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
+        status: error.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
@@ -472,13 +529,30 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
+   * The status the caller will be answered with, for anything thrown.
+   *
+   * Shared by `defaultErrorResponse` and `logHandledError` so the response and the log line cannot
+   * disagree. They used to: the response was chosen by `instanceof HTTPException` while the log
+   * level was chosen by duck-typing a numeric `status` off the error. A plain `Error` carrying a
+   * stray `.status = 401` was therefore answered 500 and logged at debug as a 4xx, and a branded
+   * exception from a second copy was answered 500 and logged as whatever status it carried.
+   */
+  private resolveErrorStatus(error: unknown): number {
+    if (error instanceof HTTPException) return error.status;
+
+    if (isHttpException(error)) return error.status;
+
+    return 500;
+  }
+
+  /**
    * Logs an error that is about to be handed to the application's error handler.
    *
-   * The level is derived from the status the client will actually see: a 4xx is the
-   * caller's mistake and the auth/validation layer doing its job, so it must not flood the
-   * ERROR stream with stack traces - an unauthenticated request would otherwise be an
-   * attacker-controlled log amplifier. Only 5xx carries a stack, because that is the class
-   * of failure nobody predicted.
+   * The level is derived from the status the client will actually see - via the same
+   * `resolveErrorStatus` the response uses, so the two cannot drift. A 4xx is the caller's
+   * mistake and the auth/validation layer doing its job, so it must not flood the ERROR stream
+   * with stack traces - an unauthenticated request would otherwise be an attacker-controlled log
+   * amplifier. Only 5xx carries a stack, because that is the class of failure nobody predicted.
    *
    * `ServerLogger.debug` is optional, so fall back to `info` when an implementation does
    * not provide it.
@@ -486,7 +560,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   private logHandledError(error: Error, path: string, method: string): void {
     if (this.logErrors === false) return;
 
-    const status = typeof (error as { status?: unknown }).status === 'number' ? (error as any).status : 500;
+    const status = this.resolveErrorStatus(error);
     const isServerError = status >= 500;
 
     const meta = {
