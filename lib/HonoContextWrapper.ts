@@ -67,7 +67,27 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     return this._context.req.param(s);
   }
 
+  /**
+   * Returns the validated body when the route declares a `json` validator, the raw parsed body
+   * otherwise.
+   *
+   * The validator's output is what the schema actually describes - unknown keys stripped,
+   * coercions and defaults applied. Reading `req.json()` here instead handed the schema's
+   * guarantees straight back to the client: `updateById({ ...body })` behind a strict validator
+   * still wrote whatever was sent. `zValidator` had the parsed value all along, in
+   * `req.valid('json')`; nothing on this context read it.
+   *
+   * Routes without a validator are unaffected - `valid('json')` is undefined and we fall through.
+   */
   public async getBody<T>(): Promise<T> {
+    // Explicit undefined check rather than `??`: a schema may legitimately produce `null`
+    // (z.null(), z.nullable()), and `??` would fall back to the raw body for it.
+    const validated = this._context.req.valid?.('json' as never) as T | undefined;
+
+    if (validated !== undefined) {
+      return validated;
+    }
+
     return await this._context.req.json<T>();
   }
 

@@ -148,9 +148,17 @@ export class CorsMiddleware extends MiddlewareService {
    *
    * Execution flow:
    * 1. Check if Origin header present (if not, skip CORS)
-   * 2. Validate origin
-   * 3. Handle preflight OPTIONS → return 204 No Content
-   * 4. Set CORS headers for actual request → call next()
+   * 2. Advertise that the response varies by Origin (unless the config is the literal '*')
+   * 3. Validate origin - when it is not allowed, emit no CORS headers and carry on
+   * 4. Handle preflight OPTIONS → return 204 No Content
+   * 5. Set CORS headers for actual request → call next()
+   *
+   * A disallowed origin is *not* answered with 403. CORS is a policy the browser enforces on
+   * behalf of the user, not an access-control decision the server makes: the correct denial is a
+   * normal response with no `Access-Control-Allow-Origin`, which the browser then refuses to
+   * expose. Rejecting outright also turned away every non-browser caller that happens to send an
+   * Origin header - server-to-server clients, proxies, webviews - and forced applications to
+   * register this middleware conditionally when CORS was already terminated at the ingress.
    *
    * @param context - Hono context wrapper
    * @param next - Function to call next middleware or handler
@@ -167,38 +175,38 @@ export class CorsMiddleware extends MiddlewareService {
     // Validate origin
     const allowedOrigin = this.getAllowedOrigin(origin);
 
-    if (!allowedOrigin) {
-      // Origin not allowed → block request
-      return new Response('CORS: Origin not allowed', { status: 403 });
+    // Any config other than the literal '*' makes the response depend on the request's Origin -
+    // the allowed-origin header is reflected back for arrays and functions, and the CORS headers
+    // are present or absent depending on the caller. A shared cache in front of the API must key
+    // on it, or it hands one origin's response to another. Set even when the origin is refused,
+    // because that response varies by Origin too.
+    if (this.origin !== '*') {
+      context.setResponseHeader('Vary', 'Origin');
     }
 
-    // Set CORS headers via AsenaContext abstraction
-    context.setResponseHeader('Access-Control-Allow-Origin', allowedOrigin);
+    if (allowedOrigin) {
+      context.setResponseHeader('Access-Control-Allow-Origin', allowedOrigin);
 
-    if (this.credentials) {
-      context.setResponseHeader('Access-Control-Allow-Credentials', 'true');
-    }
+      if (this.credentials) {
+        context.setResponseHeader('Access-Control-Allow-Credentials', 'true');
+      }
 
-    if (this.exposedHeaders) {
-      context.setResponseHeader('Access-Control-Expose-Headers', this.exposedHeaders);
+      if (this.exposedHeaders) {
+        context.setResponseHeader('Access-Control-Expose-Headers', this.exposedHeaders);
+      }
     }
 
     // Handle preflight OPTIONS request
     if (context.req.method === 'OPTIONS') {
-      // Build headers object for preflight response
-      const headers: Record<string, string> = {
-        'Access-Control-Allow-Origin': allowedOrigin,
-        'Access-Control-Allow-Methods': this.methods,
-        'Access-Control-Allow-Headers': this.allowedHeaders,
-        'Access-Control-Max-Age': this.maxAge,
-      };
-
-      if (this.credentials) {
-        headers['Access-Control-Allow-Credentials'] = 'true';
+      if (allowedOrigin) {
+        context.setResponseHeader('Access-Control-Allow-Methods', this.methods);
+        context.setResponseHeader('Access-Control-Allow-Headers', this.allowedHeaders);
+        context.setResponseHeader('Access-Control-Max-Age', this.maxAge);
       }
 
-      // Return 204 No Content for preflight
-      return new Response(null, { status: 204, headers });
+      // Built from the accumulated response headers rather than a fresh object, so anything an
+      // earlier middleware set via setResponseHeader survives the 204 instead of being dropped.
+      return new Response(null, { status: 204, headers: context.res.headers });
     }
 
     // For actual requests, continue to handler
