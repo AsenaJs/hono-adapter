@@ -51,10 +51,13 @@
   never torn down.
 
   This half pairs with `@asenajs/asena` 0.10.1, which adds `publishRemote()` and makes
-  `socket.publish()` exclude the sender whatever transport is configured. The peer range stays
-  `^0.10.0`, so an application can still resolve core `0.10.0` here; on that combination
-  `socket.publish()` takes core's legacy branch (sender included) and this adapter logs one warning at
-  startup naming `publishRemote`. Upgrading core to 0.10.1 is the fix.
+  `socket.publish()` exclude the sender whatever transport is configured. **The peer range moves to
+  `^0.10.1`.** Writing the default transport back to the field is what makes the older core reachable:
+  on 0.10.0 `AsenaSocket.publish()` has no `publishRemote` branch, so a set transport sends it down
+  `transport.publish()` → `server.publish()` and the sender receives its own message — in the default
+  configuration, not just for applications that configured a transport. The range is the only thing
+  that can rule that combination out, so the adapter no longer claims to support it. The startup
+  warning naming `publishRemote` stays for transports that are simply older than the contract.
 
 ## 3.0.0
 

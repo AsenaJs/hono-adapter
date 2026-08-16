@@ -94,9 +94,10 @@ export interface CorsOptions {
  *
  * **CORS Flow:**
  * 1. Check if request has Origin header (if not, skip CORS)
- * 2. Validate origin against allowed origins
- * 3. Handle preflight OPTIONS request → return 204 immediately
- * 4. For other requests → set CORS headers and call next()
+ * 2. Advertise that the response varies by Origin (unless the config is the literal '*')
+ * 3. Validate origin - when it is not allowed, emit no CORS headers and carry on
+ * 4. Handle preflight OPTIONS request → return 204 immediately
+ * 5. For other requests → set CORS headers and call next()
  */
 export class CorsMiddleware extends MiddlewareService {
   private readonly origin: '*' | string | string[] | ((origin: string) => boolean);
@@ -175,11 +176,8 @@ export class CorsMiddleware extends MiddlewareService {
     // Validate origin
     const allowedOrigin = this.getAllowedOrigin(origin);
 
-    // Any config other than the literal '*' makes the response depend on the request's Origin -
-    // the allowed-origin header is reflected back for arrays and functions, and the CORS headers
-    // are present or absent depending on the caller. A shared cache in front of the API must key
-    // on it, or it hands one origin's response to another. Set even when the origin is refused,
-    // because that response varies by Origin too.
+    // Non-'*' configs make the response depend on the Origin, refusals included; a shared cache
+    // that does not key on it hands one origin's response to another.
     if (this.origin !== '*') {
       context.setResponseHeader('Vary', 'Origin');
     }
@@ -204,8 +202,7 @@ export class CorsMiddleware extends MiddlewareService {
         context.setResponseHeader('Access-Control-Max-Age', this.maxAge);
       }
 
-      // Built from the accumulated response headers rather than a fresh object, so anything an
-      // earlier middleware set via setResponseHeader survives the 204 instead of being dropped.
+      // Accumulated headers, not a fresh object: earlier middlewares' headers survive the 204.
       return new Response(null, { status: 204, headers: context.res.headers });
     }
 

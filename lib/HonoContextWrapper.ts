@@ -80,8 +80,7 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
    * Routes without a validator are unaffected - `valid('json')` is undefined and we fall through.
    */
   public async getBody<T>(): Promise<T> {
-    // Explicit undefined check rather than `??`: a schema may legitimately produce `null`
-    // (z.null(), z.nullable()), and `??` would fall back to the raw body for it.
+    // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
     const validated = this._context.req.valid?.('json' as never) as T | undefined;
 
     if (validated !== undefined) {

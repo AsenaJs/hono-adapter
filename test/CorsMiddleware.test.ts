@@ -125,10 +125,8 @@ describe('CorsMiddleware — Integration', () => {
         headers: { Origin: 'https://evil.com' },
       });
 
-      // Refusing with 403 would make CORS a server-side denial, which it is not: the browser is
-      // what enforces the policy, and it does so by refusing to expose a response that carries no
-      // Access-Control-Allow-Origin. A 403 additionally turns away non-browser callers that merely
-      // happen to send an Origin header.
+      // CORS is browser-enforced: the denial is a missing header, not a server-side 403, which
+      // would also turn away non-browser callers that merely happen to send an Origin.
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true });
       expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
@@ -485,8 +483,6 @@ describe('CorsMiddleware — Integration', () => {
         headers: { Origin: 'https://evil.com' },
       });
 
-      // The header-less response is *also* origin-dependent - caching it under a key that ignores
-      // Origin would serve it to an allowed origin, which then loses its CORS headers.
       expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
       expect(res.headers.get('Vary')).toContain('Origin');
     });
@@ -506,8 +502,7 @@ describe('CorsMiddleware — Integration', () => {
         headers: { Origin: 'https://anywhere.com' },
       });
 
-      // '*' is the same answer for every origin, so the response does not vary and forcing a
-      // per-origin cache key would only cost hit rate.
+      // '*' answers every origin the same, so a per-origin cache key would only cost hit rate.
       expect(res.headers.get('Vary')).toBeNull();
     });
 
@@ -538,11 +533,8 @@ describe('CorsMiddleware — Integration', () => {
     it('should keep headers set by an earlier middleware on the 204', async () => {
       const { adapter } = createTestAdapter();
 
-      // Registered *before* CORS, so it has run by the time the preflight short-circuits. It
-      // writes through the same setResponseHeader abstraction application middlewares use. The
-      // preflight branch used to build a fresh headers object, so every one of these was dropped
-      // from the 204 - a request-id or security header would silently go missing on preflights
-      // alone, while surviving on every other method.
+      // Registered *before* CORS so it has run by the time the preflight short-circuits; the old
+      // fresh-headers object dropped it from the 204 alone, while every other method kept it.
       // @ts-ignore - test middleware shape
       adapter.use({
         handle: async (ctx: any, next: () => Promise<void>) => {
@@ -591,6 +583,8 @@ describe('CorsMiddleware — Integration', () => {
       expect(res.status).toBe(204);
       expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
       expect(res.headers.get('Access-Control-Allow-Methods')).toBeNull();
+      // A cache not keyed on Origin would replay this empty 204 to an allowed origin.
+      expect(res.headers.get('Vary')).toContain('Origin');
     });
   });
 });

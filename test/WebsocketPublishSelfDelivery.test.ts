@@ -125,12 +125,10 @@ describe('socket.publish() self-delivery does not depend on the transport', () =
     const transport = new FakeRemoteTransport();
     const { port } = await boot(transport);
 
-    // This is the load-bearing assertion of the whole fix. Before it, this count was 1: the
-    // publish came back to the socket that sent it, and applications carrying the compensating
-    // ws.send() saw 2.
+    // Load-bearing assertion of the fix: this used to be 1, and 2 for apps carrying the
+    // compensating ws.send().
     expect(await countFramesOnConnect(port, '/rooms')).toBe(0);
 
-    // ...and the message still went out to the other pods, which is the transport's actual job.
     expect(transport.remoteCalls).toHaveLength(1);
     expect(transport.remoteCalls[0].topic).toBe('rooms.room');
   });
@@ -138,10 +136,8 @@ describe('socket.publish() self-delivery does not depend on the transport', () =
   it('writes the default BunLocalTransport back to the field', async () => {
     const { wsAdapter } = await boot();
 
-    // The default used to be assigned to a local, so sockets - built from the field - got
-    // undefined while AsenaWebSocketServer got the default. That is what made the framework's own
-    // two broadcast paths disagree in the default configuration, and it also hid the default from
-    // the shutdown path, which reads the same field.
+    // A local-only default left sockets transport-less and hid it from the shutdown path, both of
+    // which read this field.
     expect(wsAdapter.transport).toBeInstanceOf(BunLocalTransport);
   });
 
@@ -173,8 +169,6 @@ describe('socket.publish() self-delivery does not depend on the transport', () =
 
     server = s;
 
-    // Silently dropping cross-pod delivery for such a transport would be the worse failure, so we
-    // keep its old behaviour and say so - once, at startup, not per message.
     const warned = (logger.warn as any).mock.calls.some((call: any[]) => String(call[0]).includes('publishRemote'));
 
     expect(warned).toBe(true);

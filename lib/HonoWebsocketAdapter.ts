@@ -168,12 +168,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
       return;
     }
 
-    // Initialize transport (default: BunLocalTransport)
-    //
-    // Assigned back to the field, not kept in a local. Sockets are built from `this._transport`
-    // (see the AsenaSocket construction below), so a default that only reached the local variable
-    // left them transport-less while AsenaWebSocketServer got one - the two broadcast paths then
-    // disagreed. `destroyTransport()` reads the field too, so the default was never torn down.
+    // Assigned to the field, not a local: sockets and destroyTransport() read `this._transport`.
     this._transport ??= new BunLocalTransport();
 
     await this._transport.init?.(server);

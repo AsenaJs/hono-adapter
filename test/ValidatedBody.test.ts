@@ -96,8 +96,7 @@ describe('getBody() returns validated data', () => {
   });
 
   it('does not fall back to the raw body when the schema output is null', async () => {
-    // `?? ` here would be wrong: null is a legitimate parse result, and falling back for it would
-    // hand the raw body to exactly the schemas that narrowed hardest.
+    // `??` would hand the raw body back to exactly the schemas that narrowed hardest.
     const baseUrl = await setup(z.null());
 
     const res = await post(baseUrl, null);
