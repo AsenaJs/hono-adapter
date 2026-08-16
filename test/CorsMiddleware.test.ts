@@ -110,7 +110,7 @@ describe('CorsMiddleware — Integration', () => {
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://allowed.com');
     });
 
-    it('should block non-matching origin with 403', async () => {
+    it('should serve a non-matching origin without CORS headers, not 403', async () => {
       const { adapter } = setupCorsAdapter({ origin: 'https://allowed.com' });
 
       await registerRoute(adapter, {
@@ -125,7 +125,11 @@ describe('CorsMiddleware — Integration', () => {
         headers: { Origin: 'https://evil.com' },
       });
 
-      expect(res.status).toBe(403);
+      // CORS is browser-enforced: the denial is a missing header, not a server-side 403, which
+      // would also turn away non-browser callers that merely happen to send an Origin.
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
     });
   });
 
@@ -158,7 +162,7 @@ describe('CorsMiddleware — Integration', () => {
       expect(resB.headers.get('Access-Control-Allow-Origin')).toBe('https://site-b.com');
     });
 
-    it('should block unlisted origin with 403', async () => {
+    it('should serve an unlisted origin without CORS headers, not 403', async () => {
       const { adapter } = setupCorsAdapter({
         origin: ['https://site-a.com', 'https://site-b.com'],
       });
@@ -175,7 +179,9 @@ describe('CorsMiddleware — Integration', () => {
         headers: { Origin: 'https://evil.com' },
       });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
     });
   });
 
@@ -203,7 +209,7 @@ describe('CorsMiddleware — Integration', () => {
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://dashboard.myapp.com');
     });
 
-    it('should block when function returns false', async () => {
+    it('should serve without CORS headers when function returns false, not 403', async () => {
       const { adapter } = setupCorsAdapter({
         origin: (o) => o.endsWith('.myapp.com'),
       });
@@ -220,7 +226,9 @@ describe('CorsMiddleware — Integration', () => {
         headers: { Origin: 'https://evil.com' },
       });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
     });
   });
 
@@ -411,6 +419,172 @@ describe('CorsMiddleware — Integration', () => {
       expect(res.status).toBe(201);
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
       expect((await res.json()).message).toBe('hello');
+    });
+  });
+
+  // ─── Vary: Origin ─────────────────────────────────────────────────
+
+  /**
+   * Why these matter: with any non-'*' config the allowed-origin header is computed from the
+   * request's own Origin. A shared cache that does not know this will hand one origin's response -
+   * complete with its Access-Control-Allow-Origin - to a request from a different origin. `Vary`
+   * is the only thing that tells it to key on the header. For a public API behind a CDN this is
+   * the difference between a policy and a cache-poisoning primitive.
+   */
+  describe('Vary: Origin', () => {
+    it('should set Vary: Origin for an array config', async () => {
+      const { adapter } = setupCorsAdapter({ origin: ['https://site-a.com'] });
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        headers: { Origin: 'https://site-a.com' },
+      });
+
+      expect(res.headers.get('Vary')).toContain('Origin');
+    });
+
+    it('should set Vary: Origin for a function config', async () => {
+      const { adapter } = setupCorsAdapter({ origin: (o) => o.endsWith('.myapp.com') });
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        headers: { Origin: 'https://dashboard.myapp.com' },
+      });
+
+      expect(res.headers.get('Vary')).toContain('Origin');
+    });
+
+    it('should set Vary: Origin even when the origin is refused', async () => {
+      const { adapter } = setupCorsAdapter({ origin: ['https://site-a.com'] });
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        headers: { Origin: 'https://evil.com' },
+      });
+
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+      expect(res.headers.get('Vary')).toContain('Origin');
+    });
+
+    it('should not set Vary for the wildcard config', async () => {
+      const { adapter } = setupCorsAdapter({ origin: '*' });
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        headers: { Origin: 'https://anywhere.com' },
+      });
+
+      // '*' answers every origin the same, so a per-origin cache key would only cost hit rate.
+      expect(res.headers.get('Vary')).toBeNull();
+    });
+
+    it('should set Vary: Origin on the preflight 204 too', async () => {
+      const { adapter } = setupCorsAdapter({ origin: ['https://site-a.com'] });
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://site-a.com' },
+      });
+
+      expect(res.status).toBe(204);
+      expect(res.headers.get('Vary')).toContain('Origin');
+    });
+  });
+
+  // ─── Preflight preserves upstream headers ─────────────────────────
+
+  describe('Preflight header preservation', () => {
+    it('should keep headers set by an earlier middleware on the 204', async () => {
+      const { adapter } = createTestAdapter();
+
+      // Registered *before* CORS so it has run by the time the preflight short-circuits; the old
+      // fresh-headers object dropped it from the 204 alone, while every other method kept it.
+      // @ts-ignore - test middleware shape
+      adapter.use({
+        handle: async (ctx: any, next: () => Promise<void>) => {
+          ctx.setResponseHeader('X-Request-Id', 'req-42');
+          return await next();
+        },
+      });
+
+      // @ts-ignore
+      adapter.use(new CorsMiddleware());
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://example.com' },
+      });
+
+      expect(res.status).toBe(204);
+      expect(res.headers.get('X-Request-Id')).toBe('req-42');
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('should answer a refused preflight 204 without CORS headers', async () => {
+      const { adapter } = setupCorsAdapter({ origin: ['https://site-a.com'] });
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://evil.com' },
+      });
+
+      expect(res.status).toBe(204);
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+      expect(res.headers.get('Access-Control-Allow-Methods')).toBeNull();
+      // A cache not keyed on Origin would replay this empty 204 to an allowed origin.
+      expect(res.headers.get('Vary')).toContain('Origin');
     });
   });
 });

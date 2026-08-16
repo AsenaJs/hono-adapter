@@ -168,18 +168,42 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
       return;
     }
 
-    // Initialize transport (default: BunLocalTransport)
-    const transport = this._transport ?? new BunLocalTransport();
+    // Assigned to the field, not a local: sockets and destroyTransport() read `this._transport`.
+    this._transport ??= new BunLocalTransport();
 
-    await transport.init?.(server);
+    await this._transport.init?.(server);
+
+    this.warnIfTransportLacksPublishRemote();
 
     // Create a single shared wrapper for all WebSocket services
-    const sharedServer = new AsenaWebSocketServer(transport);
+    const sharedServer = new AsenaWebSocketServer(this._transport);
 
     // Assign the shared wrapper to all services
     for (const websocket of this.websockets.values()) {
       websocket.server = sharedServer;
     }
+  }
+
+  /**
+   * Warns once, at startup, when the configured transport predates `publishRemote()`.
+   *
+   * Such a transport still works: `socket.publish()` falls back to its `publish()`, which does
+   * local delivery as well - so the sender receives its own message, unlike every other
+   * configuration. Warning here rather than per message keeps a hot path clean, and warning at
+   * all is the point: the alternative reading, treating the missing method as "no cross-pod
+   * delivery wanted", would drop messages between pods in silence.
+   */
+  private warnIfTransportLacksPublishRemote(): void {
+    if (typeof this._transport?.publishRemote === 'function') {
+      return;
+    }
+
+    this.logger.warn(
+      'WebSocket transport does not implement publishRemote(). socket.publish() will fall back to ' +
+        'transport.publish(), which delivers to the publishing socket as well. Implement ' +
+        'publishRemote() (broker publish only, no local delivery) to keep the sender excluded. ' +
+        'The fallback is removed in the next major version.',
+    );
   }
 
   public prepareWebSocket(options?: WSOptions): void {

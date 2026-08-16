@@ -8,7 +8,7 @@
         "@hono/zod-validator": "^0.9.0",
       },
       "devDependencies": {
-        "@asenajs/asena": "^0.10.0",
+        "@asenajs/asena": "^0.10.1",
         "@changesets/cli": "^2.30.0",
         "@types/bun": "latest",
         "@typescript-eslint/eslint-plugin": "^8.58.0",
@@ -22,7 +22,7 @@
         "zod": "^4.3.6",
       },
       "peerDependencies": {
-        "@asenajs/asena": "^0.10.0",
+        "@asenajs/asena": "^0.10.1",
         "hono": ">=4.12.9",
         "typescript": "^5.8.2",
         "zod": "^4.3.6",
@@ -30,7 +30,7 @@
     },
   },
   "packages": {
-    "@asenajs/asena": ["@asenajs/asena@0.10.0", "", { "dependencies": { "reflect-metadata": "^0.2.2" } }, "sha512-9UIjCWQARpWV5UWthaMPBVstN2/VTysGLSGV44MO8qeN6PSPhIa92jNgbMeVru1/d0MtJWiPjZnYV2g2ky8OeQ=="],
+    "@asenajs/asena": ["@asenajs/asena@0.10.1", "", { "dependencies": { "reflect-metadata": "^0.2.2" } }, "sha512-55b6IHJIAGMzs+Xwi4Gyk7sb9aCAFgcM3vyfF5+zoGUjdkAA3tsM711sqM4o7lW/Lo3nFyFaBK3ZvrBfPrGHJg=="],
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 

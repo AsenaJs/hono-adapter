@@ -455,25 +455,25 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   public onError(errorHandler: HonoErrorHandler) {
     this.hasErrorHandler = true;
 
-    this.app.onError((error, context) => {
+    this.app.onError(async (error, context) => {
       // Wrap context for user handler
       const wrapper = new HonoContextWrapper(context, this.server);
 
       try {
-        const customResponse = errorHandler(error, wrapper);
+        const customResponse = await errorHandler(error, wrapper);
 
         // A handler that returns nothing is saying "not mine, use the default" - the contract
-        // ergenecore's `respondToError` already implements. Passing `undefined` straight to Hono
-        // made Bun answer **200** with its "Welcome to Bun!" placeholder, so a failed request was
-        // reported to the client, and to every uptime monitor in front of it, as a success.
-        if (customResponse) {
+        // ergenecore's `respondToError` already implements. Matched on the type rather than on
+        // truthiness because an async handler that declines still returns a truthy Promise.
+        if (customResponse instanceof Response) {
           // The application answered. Its handler is where this error gets recorded, with
           // whatever correlation id the application carries - a second line from the adapter
           // would only duplicate it.
           return customResponse;
         }
       } catch (handlerError) {
-        // The application's handler failed. Fall through to the default response.
+        // The `await` above is what brings a rejecting handler here rather than letting it escape
+        // as an unhandled rejection.
         this.logger.error('Error handler threw an error, using the default response:', handlerError);
       }
 
