@@ -129,4 +129,53 @@ describe('an unhandled error does not leak its message to the client', () => {
     expect(response.status).toBe(500);
     expect(text).not.toContain(SECRET);
   });
+
+  /**
+   * The async twin of the test above, and the half the original fix missed.
+   *
+   * The guard it introduced was `if (customResponse)`, on an un-awaited call. An async handler
+   * returns a Promise, and a Promise is truthy however it resolves - so every async handler that
+   * declined went straight back to answering **200** with Bun's placeholder, which is the precise
+   * failure the guard was written to remove. Only the sync case was covered, so the tree stayed
+   * green with the bug in it.
+   *
+   * Async is not the exotic case here: an `onError` that reaches a database or an audit service
+   * to classify the failure is the shape the documentation recommends.
+   */
+  test('when an async application handler declines to answer', async () => {
+    const baseUrl = await boot((adapter) => adapter.onError(async () => undefined as any));
+    const response = await fetch(`${baseUrl}/boom`);
+    const text = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(text).not.toContain(SECRET);
+  });
+
+  test('when an async application handler rejects', async () => {
+    // A rejection is the async form of throwing, and must land in the same branch: the framework
+    // answers and records the *original* error. Before the await it escaped the try/catch as an
+    // unhandled rejection instead.
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(async () => {
+        throw new Error('handler blew up');
+      }),
+    );
+    const response = await fetch(`${baseUrl}/boom`);
+    const text = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain('handler blew up');
+  });
+
+  test('an async application handler that answers is still honoured', async () => {
+    // The other side of the same change: `instanceof Response` must not reject a real answer.
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(async (_error, context) => context.send({ error: 'handled' }, 503)),
+    );
+    const response = await fetch(`${baseUrl}/boom`);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'handled' });
+  });
 });

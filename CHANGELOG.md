@@ -59,6 +59,29 @@
   that can rule that combination out, so the adapter no longer claims to support it. The startup
   warning naming `publishRemote` stays for transports that are simply older than the contract.
 
+### Patch Changes
+
+- An **async** `onError` handler is now awaited
+
+  3.0.0 stopped a handler that returns nothing from answering `200 OK` with Bun's
+  `Welcome to Bun!` placeholder — but only for synchronous handlers. The guard it added was
+  `if (customResponse)` on an un-awaited call, and an async handler returns a Promise, which is
+  truthy however it resolves. Every `async onError` that declined therefore went straight back to
+  the placeholder 200, which is the exact failure the guard was written to remove. The call is now
+  awaited and matched on `instanceof Response`.
+
+  `ErrorHandler` has always been typed `Response | Promise<Response>`, so the async form was part
+  of the published contract, not an extension of it — and an `onError` that reaches a database or
+  an audit service to classify the failure before answering is the shape the documentation
+  recommends.
+
+  A **rejecting** async handler is fixed by the same `await`. It previously escaped the `try` as an
+  unhandled rejection, so the framework never answered and never logged; it now takes the same
+  branch as a handler that throws synchronously — default 500, original error logged, nothing about
+  either error echoed to the client.
+
+  `@asenajs/ergenecore` awaits its handler and has never had this bug.
+
 ## 3.0.0
 
 ### Major Changes
