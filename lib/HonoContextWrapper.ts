@@ -51,8 +51,23 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     return this._context.req.arrayBuffer();
   }
 
-  public getParseBody(): Promise<any> {
-    return this._context.req.parseBody();
+  /**
+   * Returns the validated form data when the route declares a `form` validator, the raw parsed
+   * body otherwise.
+   *
+   * Same reasoning as {@link getBody}, one representation over: `zValidator` collapses repeated
+   * keys into arrays and applies coercions into `req.valid('form')`, while `parseBody()` without
+   * options is last-value-wins - so the handler read a shape the schema had already replaced.
+   */
+  public async getParseBody(): Promise<any> {
+    // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
+    const validated = this._context.req.valid?.('form' as never);
+
+    if (validated !== undefined) {
+      return validated;
+    }
+
+    return await this._context.req.parseBody();
   }
 
   public getBlob(): Promise<Blob> {
