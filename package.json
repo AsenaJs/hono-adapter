@@ -42,17 +42,17 @@
   },
   "devDependencies": {
     "@asenajs/asena": "^0.10.1",
-    "@changesets/cli": "^2.30.0",
+    "@changesets/cli": "^2.31.1",
     "@types/bun": "latest",
-    "@typescript-eslint/eslint-plugin": "^8.58.0",
-    "@typescript-eslint/parser": "^8.58.0",
-    "eslint": "^9.39.4",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
+    "eslint": "^9.39.5",
     "eslint-config-prettier": "^9.1.2",
-    "hono": "^4.12.32",
-    "prettier": "^3.8.1",
+    "hono": "^4.13.3",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.58.0",
-    "zod": "^4.3.6"
+    "typescript-eslint": "^8.67.0",
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "@asenajs/asena": "^0.10.1",
