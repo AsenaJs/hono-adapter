@@ -112,6 +112,73 @@ describe('getBody() returns validated data', () => {
     expect((await res.json()).body).toEqual({ anything: 'goes', nested: { deep: 1 } });
   });
 
+  it('hands the handler the validated form output through getParseBody', async () => {
+    // The same property, one representation over. Hono's form validator collapses repeated keys
+    // into arrays and applies coercions, then stores the result in `c.req.valid('form')` - which
+    // nothing read. `parseBody()` without options is last-value-wins, so the handler saw
+    // `{ tags: 'b', age: '25' }` behind a schema that had already produced `{ tags: [...], age: 25 }`.
+    const { adapter } = createTestAdapter();
+
+    await adapter.registerRoute({
+      method: HttpMethod.POST,
+      path: '/form',
+      middlewares: [],
+      handler: async (ctx: any) => ctx.send({ body: await ctx.getParseBody() }),
+      staticServe: null,
+      validator: {
+        form: {
+          handle: () => z.object({ tags: z.array(z.string()), age: z.coerce.number() }),
+          override: false,
+        },
+      },
+    } as any);
+
+    const { server: s, baseUrl } = await startTestServer(adapter);
+
+    server = s;
+
+    const formData = new FormData();
+
+    formData.append('tags', 'a');
+    formData.append('tags', 'b');
+    formData.append('age', '25');
+    formData.append('drop', 'unknown');
+
+    const res = await fetch(`${baseUrl}/form`, { method: 'POST', body: formData });
+
+    const { body } = await res.json();
+
+    expect(body).toEqual({ tags: ['a', 'b'], age: 25 });
+    expect(body.drop).toBeUndefined();
+  });
+
+  it('leaves form routes without a validator on the raw parsed body', async () => {
+    // The raw shape is last-value-wins and stays that way: only a validator's output replaces it.
+    const { adapter } = createTestAdapter();
+
+    await adapter.registerRoute({
+      method: HttpMethod.POST,
+      path: '/form-raw',
+      middlewares: [],
+      handler: async (ctx: any) => ctx.send({ body: await ctx.getParseBody() }),
+      staticServe: null,
+      validator: null,
+    } as any);
+
+    const { server: s, baseUrl } = await startTestServer(adapter);
+
+    server = s;
+
+    const formData = new FormData();
+
+    formData.append('tags', 'a');
+    formData.append('tags', 'b');
+
+    const res = await fetch(`${baseUrl}/form-raw`, { method: 'POST', body: formData });
+
+    expect((await res.json()).body).toEqual({ tags: 'b' });
+  });
+
   it('returns the same validated body on repeated calls', async () => {
     const { adapter } = createTestAdapter();
 

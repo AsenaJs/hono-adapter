@@ -1,6 +1,6 @@
 # Asena Hono Adapter
 
-[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
+[![Version](https://img.shields.io/badge/version-3.2.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
 [![Bun Version](https://img.shields.io/badge/Bun-1.3.12%2B-blueviolet)](https://bun.sh)
 
 HTTP and WebSocket adapter implementation based on Hono web framework for Asena.js.
@@ -84,7 +84,6 @@ Helper function used to create a Hono adapter.
 
 **Returns:**
 - A tuple with [adapter, logger]
-
 ## Testing
 
 Asena Hono Adapter uses Bun's built-in test framework for unit and integration testing.
