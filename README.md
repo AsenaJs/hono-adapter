@@ -1,6 +1,6 @@
 # Asena Hono Adapter
 
-[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
+[![Version](https://img.shields.io/badge/version-3.2.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
 [![Bun Version](https://img.shields.io/badge/Bun-1.3.12%2B-blueviolet)](https://bun.sh)
 
 HTTP and WebSocket adapter implementation based on Hono web framework for Asena.js.
@@ -84,6 +84,44 @@ Helper function used to create a Hono adapter.
 
 **Returns:**
 - A tuple with [adapter, logger]
+
+### Form Validation
+
+A `form()` validator validates `multipart/form-data` and `application/x-www-form-urlencoded`
+bodies. `zValidator` collapses repeated keys into arrays and applies coercions, so a schema can
+declare them as such:
+
+```typescript
+import { Controller, Middleware } from '@asenajs/asena/decorators';
+import { Post } from '@asenajs/asena/decorators/http';
+import { ValidationService, type Context } from '@asenajs/hono-adapter';
+import { z } from 'zod';
+
+@Middleware({ validator: true })
+export class UploadValidator extends ValidationService {
+  form() {
+    return z.object({
+      title: z.string().min(1),
+      tags: z.array(z.string()),
+      age: z.coerce.number()
+    });
+  }
+}
+
+@Controller('/uploads')
+export class UploadController {
+  @Post({ path: '/', validator: UploadValidator })
+  public async create(context: Context) {
+    // The schema's output - `tags` is an array, `age` a number
+    const form = await context.getParseBody();
+
+    return context.send({ created: true }, 201);
+  }
+}
+```
+
+`getParseBody()` returns the schema's output when the route declares a `form` validator. Routes
+without one keep the raw `parseBody()` semantics, which are last-value-wins.
 
 ## Testing
 
