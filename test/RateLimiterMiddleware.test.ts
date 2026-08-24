@@ -348,6 +348,41 @@ describe('RateLimiterMiddleware — Integration', () => {
     });
   });
 
+  // ─── Stacked Limiters ────────────────────────────────────────────
+
+  describe('Stacked Limiters', () => {
+    it('a global and a route limiter leave one X-RateLimit-* header per key', async () => {
+      const { adapter } = createTestAdapter();
+
+      const globalLimiter = new RateLimiterMiddleware({ capacity: 100, refillRate: 10, cleanupInterval: 0 });
+      const routeLimiter = new RateLimiterMiddleware({ capacity: 50, refillRate: 5, cleanupInterval: 0 });
+      rateLimiter = globalLimiter;
+
+      // @ts-ignore
+      adapter.use(globalLimiter);
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        middlewares: [routeLimiter as any],
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`);
+      expect(res.status).toBe(200);
+
+      // The route limiter runs last, so its values win; the old append semantics produced
+      // joined duplicates like "600, 300" when both limiters touched the same request.
+      expect(res.headers.get('X-RateLimit-Limit')).toBe('300');
+      expect(res.headers.get('X-RateLimit-Remaining')).toBe('49');
+      expect(res.headers.get('X-RateLimit-Reset')).not.toContain(',');
+
+      routeLimiter.destroy();
+    });
+  });
+
   // ─── Bucket Management ────────────────────────────────────────────
 
   describe('Bucket Management', () => {

@@ -179,7 +179,7 @@ export class CorsMiddleware extends MiddlewareService {
     // Non-'*' configs make the response depend on the Origin, refusals included; a shared cache
     // that does not key on it hands one origin's response to another.
     if (this.origin !== '*') {
-      context.setResponseHeader('Vary', 'Origin');
+      this.appendVaryOrigin(context);
     }
 
     if (allowedOrigin) {
@@ -208,6 +208,26 @@ export class CorsMiddleware extends MiddlewareService {
 
     // For actual requests, continue to handler
     return await next();
+  }
+
+  /**
+   * Appends `Origin` to `Vary` without clobbering values an earlier middleware already pinned
+   * (`Accept-Encoding`, …) and without listing `Origin` twice when this middleware runs more
+   * than once: comma-split the existing value, trim, compare case-insensitively, append only
+   * when missing.
+   */
+  private appendVaryOrigin(context: Context): void {
+    const existing = context.res.headers.get('Vary');
+
+    if (existing?.split(',').some((value) => value.trim().toLowerCase() === 'origin')) {
+      return;
+    }
+
+    if (context.appendResponseHeader) {
+      context.appendResponseHeader('Vary', 'Origin');
+    } else {
+      context.setResponseHeader?.('Vary', existing ? `${existing}, Origin` : 'Origin');
+    }
   }
 
   /**

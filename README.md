@@ -18,7 +18,7 @@ HTTP and WebSocket adapter implementation based on Hono web framework for Asena.
 ## Requirements
 
 - [Bun](https://bun.sh) v1.3.12 or higher
-- [@asenajs/asena](https://github.com/AsenaJs/Asena) v0.10.0 or higher (peer dependency)
+- [@asenajs/asena](https://github.com/AsenaJs/Asena) v0.11.0 or higher (peer dependency)
 - [Hono](https://hono.dev) v4.12.9 or higher (peer dependency)
 - [Zod](https://zod.dev) v4.3.6 or higher (peer dependency)
 - TypeScript v5.8.2 or above
@@ -84,6 +84,7 @@ Helper function used to create a Hono adapter.
 
 **Returns:**
 - A tuple with [adapter, logger]
+
 ## Testing
 
 Asena Hono Adapter uses Bun's built-in test framework for unit and integration testing.
