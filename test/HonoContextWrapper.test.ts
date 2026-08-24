@@ -796,7 +796,7 @@ describe('HonoContextWrapper', () => {
         path: '/sse-comment-data',
         handler: (ctx) =>
           ctx.streamSSE(async (stream) => {
-            await stream.writeSSE({ comment: 'ping', data: 'hello', event: 'greet', id: '7' });
+            await stream.writeSSE({ comment: 'ping', data: 'hello', event: 'greet', id: '7', retry: 2500 });
             await stream.close();
           }),
       });
@@ -805,7 +805,7 @@ describe('HonoContextWrapper', () => {
       server = s;
 
       const res = await fetch(`${baseUrl}/sse-comment-data`);
-      expect(await res.text()).toBe(': ping\n\nevent: greet\ndata: hello\nid: 7\n\n');
+      expect(await res.text()).toBe(': ping\n\nevent: greet\ndata: hello\nid: 7\nretry: 2500\n\n');
     });
 
     it('streamSSE() rejects a message with neither data nor comment', async () => {

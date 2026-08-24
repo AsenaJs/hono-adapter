@@ -223,11 +223,7 @@ export class CorsMiddleware extends MiddlewareService {
       return;
     }
 
-    if (context.appendResponseHeader) {
-      context.appendResponseHeader('Vary', 'Origin');
-    } else {
-      context.setResponseHeader?.('Vary', existing ? `${existing}, Origin` : 'Origin');
-    }
+    context.appendResponseHeader?.('Vary', 'Origin');
   }
 
   /**
