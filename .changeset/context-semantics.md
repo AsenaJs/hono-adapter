@@ -6,4 +6,4 @@ Breaking: `setResponseHeader` now **replaces** the header value (it appended bef
 
 `CorsMiddleware` now appends `Vary: Origin` through `appendResponseHeader` with an "already listed" guard, so an upstream `Vary: Accept-Encoding` survives instead of being clobbered, and `Origin` is never listed twice when the middleware runs more than once. A global and a route `RateLimiterMiddleware` on the same request no longer produce duplicated `X-RateLimit-*` headers: with replace semantics the innermost limiter's values win, each header appearing exactly once.
 
-Requires `@asenajs/asena` ^0.11.0.
+Requires `@asenajs/asena` `^0.11.0` as the peer dependency and Bun 1.4. Core 0.10.x is outside the peer range.
