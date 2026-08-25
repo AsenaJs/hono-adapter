@@ -105,7 +105,7 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     return await this._context.req.json<T>();
   }
 
-  public async getQuery(query: string): Promise<string> {
+  public async getQuery(query: string): Promise<string | undefined> {
     return this._context.req.query(query);
   }
 
@@ -179,7 +179,18 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     return this._requestIp;
   }
 
+  /**
+   * Replaces any value already set for the header - the core contract's semantics. To keep
+   * existing values (`Vary`, `Link`, …) use {@link appendResponseHeader}.
+   */
   public setResponseHeader(key: string, value: string): void {
+    this._context.res.headers.set(key, value);
+  }
+
+  /**
+   * Appends the value, keeping any value(s) already set for the header.
+   */
+  public appendResponseHeader(key: string, value: string): void {
     this._context.res.headers.append(key, value);
   }
 
@@ -299,7 +310,30 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
   private wrapSSEStreamingApi(honoStream: SSEStreamingApi): AsenaSSEStreamWriter {
     return {
       ...this.wrapStreamingApi(honoStream),
-      writeSSE: (message) => honoStream.writeSSE(message),
+      writeSSE: async (message) => {
+        if (message.data === undefined && message.comment === undefined) {
+          throw new Error('writeSSE: message needs data or comment');
+        }
+
+        // Hono's writeSSE has no comment field, so comments are written by hand: one
+        // `: <line>` per line, closed with a blank line. Comment first, then the event.
+        if (message.comment !== undefined) {
+          const lines = message.comment
+            .split(/\r\n|\r|\n/)
+            .map((line) => `: ${line}`)
+            .join('\n');
+          await honoStream.write(`${lines}\n\n`);
+        }
+
+        if (message.data !== undefined) {
+          await honoStream.writeSSE({
+            data: message.data,
+            event: message.event,
+            id: message.id,
+            retry: message.retry,
+          });
+        }
+      },
     };
   }
 

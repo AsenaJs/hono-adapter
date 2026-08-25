@@ -525,6 +525,89 @@ describe('CorsMiddleware — Integration', () => {
       expect(res.status).toBe(204);
       expect(res.headers.get('Vary')).toContain('Origin');
     });
+
+    it('should append Origin to an existing Vary without clobbering it', async () => {
+      const { adapter } = createTestAdapter();
+
+      // Registered *before* CORS, like a compression middleware that already pinned Vary: with
+      // replace-semantics `setResponseHeader` this append must keep Accept-Encoding alive.
+      // @ts-ignore - test middleware shape
+      adapter.use({
+        handle: async (ctx: any, next: () => Promise<void>) => {
+          ctx.setResponseHeader('Vary', 'Accept-Encoding');
+          return await next();
+        },
+      });
+
+      // @ts-ignore
+      adapter.use(new CorsMiddleware({ origin: ['https://site-a.com'] }));
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        headers: { Origin: 'https://site-a.com' },
+      });
+
+      expect(res.headers.get('Vary')).toBe('Accept-Encoding, Origin');
+    });
+
+    it('should list Origin exactly once when the middleware runs twice', async () => {
+      const { adapter } = createTestAdapter();
+
+      // @ts-ignore
+      adapter.use(new CorsMiddleware({ origin: ['https://site-a.com'] }));
+      // @ts-ignore
+      adapter.use(new CorsMiddleware({ origin: ['https://site-b.com'] }));
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        headers: { Origin: 'https://site-a.com' },
+      });
+
+      expect(res.headers.get('Vary')).toBe('Origin');
+    });
+
+    it('should recognise an already-listed Origin case-insensitively', async () => {
+      const { adapter } = createTestAdapter();
+
+      // @ts-ignore - test middleware shape
+      adapter.use({
+        handle: async (ctx: any, next: () => Promise<void>) => {
+          ctx.setResponseHeader('Vary', 'origin');
+          return await next();
+        },
+      });
+
+      // @ts-ignore
+      adapter.use(new CorsMiddleware({ origin: ['https://site-a.com'] }));
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/api/data`, {
+        headers: { Origin: 'https://site-a.com' },
+      });
+
+      expect(res.headers.get('Vary')).toBe('origin');
+    });
   });
 
   // ─── Preflight preserves upstream headers ─────────────────────────

@@ -214,6 +214,28 @@ describe('HonoContextWrapper', () => {
       expect(data.name).toBe('alice');
       expect(data.tag).toEqual(['a', 'b']);
     });
+
+    it('getQuery() returns undefined when absent and "" when present but empty', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/q-maybe',
+        handler: async (ctx) => {
+          const present: string | undefined = await ctx.getQuery('name');
+          return ctx.send({ present, isUndefined: present === undefined });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const empty = await (await fetch(`${baseUrl}/q-maybe?name=`)).json();
+      expect(empty.present).toBe('');
+      expect(empty.isUndefined).toBe(false);
+
+      const absent = await (await fetch(`${baseUrl}/q-maybe`)).json();
+      expect(absent.isUndefined).toBe(true);
+    });
   });
 
   // ─── Route Parameters ─────────────────────────────────────────────
@@ -489,6 +511,44 @@ describe('HonoContextWrapper', () => {
       expect(res.headers.get('X-Request-Id')).toBe('abc-123');
       expect(res.headers.get('X-Trace')).toBe('trace-456');
     });
+
+    it('setResponseHeader() twice with the same key keeps only the last value', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/replace-header',
+        handler: (ctx) => {
+          ctx.setResponseHeader('X-Replace', 'first');
+          ctx.setResponseHeader('X-Replace', 'second');
+          return ctx.send({ ok: true });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/replace-header`);
+      expect(res.headers.get('X-Replace')).toBe('second');
+    });
+
+    it('appendResponseHeader() twice keeps both values', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/append-header',
+        handler: (ctx) => {
+          ctx.appendResponseHeader('X-Append', 'a');
+          ctx.appendResponseHeader('X-Append', 'b');
+          return ctx.send({ ok: true });
+        },
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/append-header`);
+      expect(res.headers.get('X-Append')).toBe('a, b');
+    });
   });
 
   // ─── Redirect ─────────────────────────────────────────────────────
@@ -688,6 +748,88 @@ describe('HonoContextWrapper', () => {
       expect(text).toContain('event: message');
       expect(text).toContain('data: hello');
       expect(text).toContain('id: 1');
+    });
+
+    it('streamSSE() writes a comment-only message as ": ping" plus a blank line', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/sse-comment',
+        handler: (ctx) =>
+          ctx.streamSSE(async (stream) => {
+            await stream.writeSSE({ comment: 'ping' });
+            await stream.close();
+          }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/sse-comment`);
+      expect(res.headers.get('content-type')).toContain('text/event-stream');
+      expect(await res.text()).toBe(': ping\n\n');
+    });
+
+    it('streamSSE() writes one ": " line per line of a multi-line comment', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/sse-comment-multi',
+        handler: (ctx) =>
+          ctx.streamSSE(async (stream) => {
+            await stream.writeSSE({ comment: 'keep-alive\nstill here' });
+            await stream.close();
+          }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/sse-comment-multi`);
+      expect(await res.text()).toBe(': keep-alive\n: still here\n\n');
+    });
+
+    it('streamSSE() writes the comment block before the data block of the same message', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/sse-comment-data',
+        handler: (ctx) =>
+          ctx.streamSSE(async (stream) => {
+            await stream.writeSSE({ comment: 'ping', data: 'hello', event: 'greet', id: '7', retry: 2500 });
+            await stream.close();
+          }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/sse-comment-data`);
+      expect(await res.text()).toBe(': ping\n\nevent: greet\ndata: hello\nid: 7\nretry: 2500\n\n');
+    });
+
+    it('streamSSE() rejects a message with neither data nor comment', async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/sse-empty',
+        handler: (ctx) =>
+          ctx.streamSSE(async (stream) => {
+            try {
+              await stream.writeSSE({});
+              await stream.write('NO THROW');
+            } catch (e) {
+              await stream.write(`THROWN:${(e as Error).message}`);
+            }
+            await stream.close();
+          }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/sse-empty`);
+      expect(await res.text()).toContain('THROWN:writeSSE: message needs data or comment');
     });
 
     it('streamText() should stream text content', async () => {
