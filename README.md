@@ -15,6 +15,8 @@ HTTP and WebSocket adapter implementation based on Hono web framework for Asena.
 - Validation support with Zod
 - Decorators for controller-based routing
 
+Request pipeline order: global middlewares → route middlewares → validator → handler.
+
 ## Requirements
 
 - [Bun](https://bun.sh) v1.4 or higher
