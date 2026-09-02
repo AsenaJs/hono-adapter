@@ -841,32 +841,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
-   * Gets global middlewares that should be applied to a specific path
-   *
-   * Filters global middlewares based on their include/exclude patterns.
-   * Pattern matching happens once during route registration (zero runtime overhead).
-   *
-   * @param path - The route path to check against middleware patterns
-   * @returns Array of middlewares that should be applied to this path
-   *
-   * @example
-   * ```typescript
-   * // If global middlewares are:
-   * // - authMiddleware with { include: ['/api/*'], exclude: ['/api/health'] }
-   * // - rateLimitMiddleware with no config
-   *
-   * getGlobalMiddlewaresForPath('/api/users')    // => [authMiddleware, rateLimitMiddleware]
-   * getGlobalMiddlewaresForPath('/api/health')   // => [rateLimitMiddleware]
-   * getGlobalMiddlewaresForPath('/public/file')  // => [rateLimitMiddleware]
-   * ```
-   */
-  private getGlobalMiddlewaresForPath(path: string): BaseMiddleware<HonoAdapterContext>[] {
-    return this.globalMiddlewares
-      .filter(({ config }) => shouldApplyMiddleware(path, config))
-      .map(({ middleware }) => middleware);
-  }
-
-  /**
    * Sorts the queued routes and registers each one with its own middlewares.
    *
    * There used to be a "common middleware" optimisation here: routes sharing a base path were
@@ -950,18 +924,11 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Converts HTTP GET route to WebSocket upgrade endpoint
    */
   private async registerWebsocketRouteDirect(wsRoute: WebsocketRouteParams<HonoAdapterContext>): Promise<void> {
-    // Get filtered global middlewares for this WebSocket route
-    const applicableGlobalMiddlewares = this.getGlobalMiddlewaresForPath(wsRoute.path);
-    const preparedGlobalMiddlewares = this.prepareMiddlewares(applicableGlobalMiddlewares);
-
     const preparedMiddlewares = this.prepareMiddlewares(wsRoute.middlewares || []);
-
-    // Combine: global middlewares -> route middlewares
-    const allMiddlewares = [...preparedGlobalMiddlewares, ...preparedMiddlewares];
 
     const normalizedWsPath = this.normalizePath(`/${wsRoute.path}`);
 
-    (this.app as any).get(normalizedWsPath, ...allMiddlewares, async (c: Context, next) => {
+    (this.app as any).get(normalizedWsPath, ...preparedMiddlewares, async (c: Context, next) => {
       const websocketData = c.get('_websocketData') || {};
 
       const id = bun.randomUUIDv7();
