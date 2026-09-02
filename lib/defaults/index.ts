@@ -5,3 +5,4 @@ export * from './ConfigService';
 export * from './StaticServeService';
 export * from '../middlewares/CorsMiddleware';
 export * from '../middlewares/RateLimiterMiddleware';
+export * from '../middlewares/WebSocketOriginMiddleware';
