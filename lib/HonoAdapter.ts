@@ -979,7 +979,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
-   * Registers a single route directly without grouping
+   * Registers a single route directly without grouping.
+   *
+   * Route middlewares run before the route's validator - global middlewares → route
+   * middlewares → validator → handler - matching ergenecore.
    */
   private async registerRouteDirect(
     route: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
@@ -988,7 +991,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const validators = route.validator ? await this.prepareValidator(route.validator) : [];
 
     // Global middlewares are registered at top level via registerGlobalMiddlewaresTopLevel()
-    const allMiddlewares = [...validators, ...preparedMiddlewares];
+    const allMiddlewares = [...preparedMiddlewares, ...validators];
 
     const methodHandler =
       this.methodMap[route.method] ??
