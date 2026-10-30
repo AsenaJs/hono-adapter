@@ -138,6 +138,7 @@ export interface RateLimiterOptions {
   /**
    * Upper bound on distinct client buckets held in memory. When a new client arrives at the cap, the
    * least recently seen bucket is evicted - that client starts over with a full bucket.
+   * Must be a positive integer; the constructor throws otherwise.
    *
    * @default 10000
    */
@@ -349,6 +350,11 @@ export class RateLimiterMiddleware extends MiddlewareService {
     this.keyGenerator = options.keyGenerator ?? this.defaultKeyGenerator.bind(this);
     this.trustProxy = options.trustProxy ?? false;
     this.maxBuckets = options.maxBuckets ?? 10_000;
+
+    if (!Number.isInteger(this.maxBuckets) || this.maxBuckets < 1) {
+      throw new Error(`RateLimiterMiddleware: maxBuckets must be a positive integer, got ${this.maxBuckets}`);
+    }
+
     this.message = options.message ?? 'Rate limit exceeded. Please try again later.';
     this.statusCode = options.statusCode ?? 429;
     this.cost = options.cost ?? 1;

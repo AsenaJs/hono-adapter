@@ -743,3 +743,28 @@ describe('RateLimiterMiddleware — Integration', () => {
     });
   });
 });
+
+describe('RateLimiterMiddleware — maxBuckets validation', () => {
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])('should reject maxBuckets = %p', (maxBuckets) => {
+    expect(() => new RateLimiterMiddleware({ maxBuckets, cleanupInterval: 0 })).toThrow(
+      /maxBuckets must be a positive integer/,
+    );
+  });
+
+  it('should accept maxBuckets = 1 and hold at most one bucket', async () => {
+    const rl = new RateLimiterMiddleware({
+      maxBuckets: 1,
+      cleanupInterval: 0,
+      keyGenerator: (ctx) => ctx.req.header('x-client') || 'unknown',
+    });
+    const context = (client: string) => ({ req: { header: () => client }, setResponseHeader: () => {} }) as any;
+
+    await rl.handle(context('c1'), async () => {});
+    await rl.handle(context('c2'), async () => {});
+
+    expect(rl.getBucketState('c1')).toBeUndefined();
+    expect(rl.getBucketState('c2')).toBeDefined();
+
+    rl.destroy();
+  });
+});
