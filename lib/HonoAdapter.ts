@@ -35,7 +35,7 @@ import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
 import { HonoWebsocketAdapter } from './HonoWebsocketAdapter';
 import type { WebSocketData } from '@asenajs/asena/web-socket';
-import { serveStatic } from 'hono/bun';
+import { serveStatic } from './utils/serveStatic';
 
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
@@ -735,6 +735,20 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         // The user hook runs first and wins if it answers the request, but it no
         // longer *replaces* the default handling: a hook added for logging or
         // context enrichment used to silently change that route's error contract
+        if (!hook) {
+          validators.push(
+            zValidator(key as keyof ValidationTargets, schema, undefined, {
+              validationFunction: async (target, value) => {
+                const result = await target.safeParseAsync(value);
+
+                return result.success ? result : this.handleValidationFailure(result.error, key);
+              },
+            }),
+          );
+
+          continue;
+        }
+
         const validator = zValidator(key as keyof ValidationTargets, schema, async (result, c) => {
           if (hook) {
             const hookResult = await hook(result, c);

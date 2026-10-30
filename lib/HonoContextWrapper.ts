@@ -14,6 +14,50 @@ import type { SSEStreamingApi } from 'hono/streaming';
 import type { CookieOptions } from 'hono/utils/cookie';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { StreamingApi } from 'hono/utils/stream';
+import { getQueryParam } from 'hono/utils/url';
+
+const TEXT_PLAIN = 'text/plain; charset=UTF-8';
+
+const APPLICATION_JSON = 'application/json';
+
+const hasEncoding = (value: string): boolean => value.includes('%') || value.includes('+');
+
+const findQueryParam = (url: string, key: string): string | undefined => {
+  if (!key || hasEncoding(key)) {
+    return getQueryParam(url, key) as string | undefined;
+  }
+
+  const start = url.indexOf('?', 8);
+
+  if (start === -1) {
+    return undefined;
+  }
+
+  const length = key.length;
+  let index = url.indexOf(key, start + 1);
+
+  while (index !== -1) {
+    if (index === start + 1 || url.charCodeAt(index - 1) === 38) {
+      const next = url.charCodeAt(index + length);
+
+      if (next === 61) {
+        const valueStart = index + length + 1;
+        const end = url.indexOf('&', valueStart);
+        const value = end === -1 ? url.slice(valueStart) : url.slice(valueStart, end);
+
+        return hasEncoding(value) ? (getQueryParam(url, key) as string | undefined) : value;
+      }
+
+      if (next === 38 || Number.isNaN(next)) {
+        return '';
+      }
+    }
+
+    index = url.indexOf(key, index + 1);
+  }
+
+  return hasEncoding(url) ? (getQueryParam(url, key) as string | undefined) : undefined;
+};
 
 export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, Response> {
   private _context: Context;
@@ -21,6 +65,8 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
   private _server?: Server<never>;
 
   private _requestIp?: string | null;
+
+  private _url?: string;
 
   public constructor(context: Context, server?: Server<never>) {
     this._context = context;
@@ -44,7 +90,39 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
   }
 
   public get headers(): Record<string, string> {
-    return this._context.req.header();
+    const raw = this._context.req.raw.headers.toJSON() as Record<string, string | string[]>;
+    const keys = Object.keys(raw);
+    const count = keys.length;
+
+    for (let i = 1; i < count; i++) {
+      const key = keys[i];
+      let j = i - 1;
+
+      while (j >= 0 && keys[j] > key) {
+        keys[j + 1] = keys[j];
+        j--;
+      }
+
+      keys[j + 1] = key;
+    }
+
+    const headers: Record<string, string> = Object.create(null);
+
+    for (let i = 0; i < count; i++) {
+      const key = keys[i];
+
+      if (key !== 'set-cookie') {
+        headers[key] = raw[key] as string;
+      }
+    }
+
+    const setCookie = raw['set-cookie'];
+
+    if (setCookie !== undefined) {
+      headers['set-cookie'] = typeof setCookie === 'string' ? setCookie : setCookie[setCookie.length - 1];
+    }
+
+    return headers;
   }
 
   public getArrayBuffer(): Promise<ArrayBuffer> {
@@ -59,15 +137,19 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
    * keys into arrays and applies coercions into `req.valid('form')`, while `parseBody()` without
    * options is last-value-wins - so the handler read a shape the schema had already replaced.
    */
-  public async getParseBody(): Promise<any> {
-    // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
-    const validated = this._context.req.valid?.('form' as never);
+  public getParseBody(): Promise<any> {
+    try {
+      // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
+      const validated = this._context.req.valid?.('form' as never);
 
-    if (validated !== undefined) {
-      return validated;
+      if (validated !== undefined) {
+        return Promise.resolve(validated);
+      }
+
+      return this._context.req.parseBody();
+    } catch (error) {
+      return Promise.reject(error as Error);
     }
-
-    return await this._context.req.parseBody();
   }
 
   public getBlob(): Promise<Blob> {
@@ -94,23 +176,35 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
    *
    * Routes without a validator are unaffected - `valid('json')` is undefined and we fall through.
    */
-  public async getBody<T>(): Promise<T> {
-    // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
-    const validated = this._context.req.valid?.('json' as never) as T | undefined;
+  public getBody<T>(): Promise<T> {
+    try {
+      // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
+      const validated = this._context.req.valid?.('json' as never) as T | undefined;
 
-    if (validated !== undefined) {
-      return validated;
+      if (validated !== undefined) {
+        return Promise.resolve(validated);
+      }
+
+      return this._context.req.json<T>();
+    } catch (error) {
+      return Promise.reject(error as Error);
     }
-
-    return await this._context.req.json<T>();
   }
 
-  public async getQuery(query: string): Promise<string | undefined> {
-    return this._context.req.query(query);
+  public getQuery(query: string): Promise<string | undefined> {
+    try {
+      return Promise.resolve(findQueryParam((this._url ??= this._context.req.url), query));
+    } catch (error) {
+      return Promise.reject(error as Error);
+    }
   }
 
-  public async getQueryAll(query: string): Promise<string[]> {
-    return this._context.req.queries(query);
+  public getQueryAll(query: string): Promise<string[]> {
+    try {
+      return Promise.resolve(this._context.req.queries(query));
+    } catch (error) {
+      return Promise.reject(error as Error);
+    }
   }
 
   public getAllQueries(): Record<string, string | string[]> {
@@ -125,20 +219,59 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
   }
 
   public send(data: string | any, statusOrOptions?: SendOptions | number): Response {
-    const { headers = {}, status = 200 } =
-      typeof statusOrOptions === 'number' ? { status: statusOrOptions } : statusOrOptions || {};
+    let status = 200;
+    let headers: SendOptions['headers'];
+
+    if (typeof statusOrOptions === 'number') {
+      status = statusOrOptions;
+    } else if (statusOrOptions) {
+      if (statusOrOptions.status !== undefined) {
+        status = statusOrOptions.status;
+      }
+
+      headers = statusOrOptions.headers;
+    }
+
+    const context = this._context;
 
     if (headers !== undefined) {
-      Object.entries(headers).forEach(([key, value]) => {
-        this._context.res.headers.append(key, value);
-      });
+      for (const [key, value] of Object.entries(headers)) {
+        context.res.headers.append(key, value);
+      }
+    } else if (status === 200) {
+      return typeof data === 'string' ? this.sendText(data) : this.sendJson(data);
     }
 
     if (typeof data === 'string') {
-      return this._context.text(data, status as ContentfulStatusCode);
+      return context.text(data, status as ContentfulStatusCode);
     }
 
-    return this._context.json(data, status as ContentfulStatusCode, headers);
+    return context.json(data, status as ContentfulStatusCode, headers);
+  }
+
+  private sendText(data: string): Response {
+    const response = this._context.text(data);
+
+    if (response.headers.get('content-type') === null) {
+      response.headers.set('Content-Type', TEXT_PLAIN);
+
+      return response;
+    }
+
+    return response.status === 200 ? response : this._context.text(data, 200);
+  }
+
+  private sendJson(data: unknown): Response {
+    const body = JSON.stringify(data);
+    const response = this._context.text(body);
+
+    if (response.headers.get('content-type') === null) {
+      response.headers.set('Content-Type', APPLICATION_JSON);
+
+      return response;
+    }
+
+    return this._context.body(body, 200, { 'Content-Type': APPLICATION_JSON });
   }
 
   public async getCookie(name: string, secret?: string | BufferSource): Promise<string | false> {
@@ -343,5 +476,6 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
 
   public set context(value: Context) {
     this._context = value;
+    this._url = undefined;
   }
 }
