@@ -605,12 +605,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   private getRequestWrapper(context: Context): HonoContextWrapper {
-    let wrapper = context.get('_asenaContextWrapper') as HonoContextWrapper | undefined;
-    if (!wrapper) {
-      wrapper = new HonoContextWrapper(context, this.server);
-      context.set('_asenaContextWrapper', wrapper);
-    }
-    return wrapper;
+    return (
+      (context.get('_asenaContextWrapper') as HonoContextWrapper | undefined) ??
+      new HonoContextWrapper(context, this.server)
+    );
   }
 
   /**
@@ -656,7 +654,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           }
 
           // Call user callback
-          await staticServe.onFound.handler(path, new HonoContextWrapper(c, this.server));
+          await staticServe.onFound.handler(path, this.getRequestWrapper(c));
         };
       }
     } else if (staticServe.extra?.cacheControl || staticServe.extra?.headers) {
@@ -681,7 +679,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         staticServeOptions.onNotFound = staticServe.onNotFound.handler;
       } else {
         staticServeOptions.onNotFound = (path, c: Context) => {
-          staticServe.onNotFound.handler(path, new HonoContextWrapper(c, this.server));
+          staticServe.onNotFound.handler(path, this.getRequestWrapper(c));
         };
       }
     }

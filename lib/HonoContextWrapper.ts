@@ -23,6 +23,9 @@ import type { CookieOptions } from 'hono/utils/cookie';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { StreamingApi } from 'hono/utils/stream';
 import { getQueryParam } from 'hono/utils/url';
+import { bufferToFormData } from 'hono/utils/buffer';
+
+const VALIDATED_INPUT_KEY = '_asenaValidatedInput';
 
 const TEXT_PLAIN = 'text/plain; charset=UTF-8';
 
@@ -71,7 +74,22 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   HonoRequest<any, any>,
   Response
 > {
-  private validatedInput?: ValidatedInput<I>;
+  // Kept on the Hono context so every wrapper of one request - global middleware, route
+  // context subclass, error handler - sees the same validated input.
+  private get validatedInput(): ValidatedInput<I> | undefined {
+    return this._context.get(VALIDATED_INPUT_KEY as never) as ValidatedInput<I> | undefined;
+  }
+
+  private ensureValidatedInput(): ValidatedInput<I> {
+    let validated = this.validatedInput;
+
+    if (!validated) {
+      validated = new ValidatedInput<I>();
+      this._context.set(VALIDATED_INPUT_KEY as never, validated as never);
+    }
+
+    return validated;
+  }
 
   public get input(): Readonly<I> {
     return this.validatedInput?.input ?? new ValidatedInput<I>().input;
@@ -79,12 +97,12 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
 
   /** @internal */
   public setValidated(target: InputTarget, value: unknown): void {
-    (this.validatedInput ??= new ValidatedInput<I>()).set(target, value);
+    this.ensureValidatedInput().set(target, value);
   }
 
   /** @internal */
   public completeValidatedInput(): void {
-    (this.validatedInput ??= new ValidatedInput<I>()).complete();
+    this.ensureValidatedInput().complete();
   }
 
   /** @internal */
@@ -93,7 +111,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
       case 'body':
         return readContractBody(() => this._context.req.arrayBuffer(), this._context.req.header('content-type') ?? '');
       case 'form':
-        return readContractForm(() => this.getFormData(), this._context.req.header('content-type') ?? '');
+        return readContractForm(() => this.readCachedFormData(), this._context.req.header('content-type') ?? '');
       case 'query':
         return this.getAllQueries();
       case 'headers':
@@ -107,6 +125,23 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
       case 'params':
         return this._context.req.param();
     }
+  }
+
+  // Same approach as Hono's form validator: `req.formData()` over an already-read body rebuilds
+  // it without the content type and fails to parse.
+  private async readCachedFormData(): Promise<FormData> {
+    const req = this._context.req;
+    const cached = req.bodyCache.formData;
+
+    if (cached) {
+      return cached;
+    }
+
+    const formData = await bufferToFormData(await req.arrayBuffer(), req.header('content-type') ?? '');
+
+    req.bodyCache.formData = formData;
+
+    return formData;
   }
 
   private _context: Context;
@@ -188,15 +223,18 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
    */
   public getParseBody<T = keyof I extends never ? any : InputOutput<I, 'form'>>(): Promise<T> {
     try {
-      if (this.validatedInput?.has('form')) return Promise.resolve(this.validatedInput.get('form') as T);
+      const req = this._context.req;
+      const input = this.validatedInput;
+
+      if (input?.has('form')) return Promise.resolve(input.get('form') as T);
       // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
-      const validated = this._context.req.valid?.('form' as never);
+      const validated = req.valid?.('form' as never);
 
       if (validated !== undefined) {
         return Promise.resolve(validated as T);
       }
 
-      return this._context.req.parseBody() as Promise<T>;
+      return req.parseBody() as Promise<T>;
     } catch (error) {
       return Promise.reject(error as Error);
     }
@@ -228,15 +266,18 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
    */
   public getBody<T = keyof I extends never ? any : InputOutput<I, 'body'>>(): Promise<T> {
     try {
-      if (this.validatedInput?.has('body')) return Promise.resolve(this.validatedInput.get('body') as T);
+      const req = this._context.req;
+      const input = this.validatedInput;
+
+      if (input?.has('body')) return Promise.resolve(input.get('body') as T);
       // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
-      const validated = this._context.req.valid?.('json' as never) as T | undefined;
+      const validated = req.valid?.('json' as never) as T | undefined;
 
       if (validated !== undefined) {
         return Promise.resolve(validated);
       }
 
-      return this._context.req.json<T>();
+      return req.json<T>();
     } catch (error) {
       return Promise.reject(error as Error);
     }
