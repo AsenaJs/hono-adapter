@@ -289,7 +289,7 @@ test('metadata routes cache legacy factories by default and rebuild with validat
       });
     trace.length = 0;
     expect((await send('default', 'first')).status).toBe(200);
-    expect(trace).toEqual(['validation', 'route']);
+    expect(trace).toEqual(['route', 'validation']);
     expect((await send('dynamic', 'first')).status).toBe(200);
     acceptedValue = 'second';
     expect((await send('default', 'first')).status).toBe(200);
