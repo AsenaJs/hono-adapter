@@ -1,3 +1,11 @@
+import {
+  ValidatedInput,
+  readContractBody,
+  readContractForm,
+  type InputMap,
+  type InputOutput,
+  type InputTarget,
+} from '@asenajs/asena/adapter';
 import type { Server } from 'bun';
 import type { Context, HonoRequest } from 'hono';
 import type {
@@ -59,7 +67,48 @@ const findQueryParam = (url: string, key: string): string | undefined => {
   return hasEncoding(url) ? (getQueryParam(url, key) as string | undefined) : undefined;
 };
 
-export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, Response> {
+export class HonoContextWrapper<I extends InputMap = Record<never, never>> implements AsenaContext<
+  HonoRequest<any, any>,
+  Response
+> {
+  private validatedInput?: ValidatedInput<I>;
+
+  public get input(): Readonly<I> {
+    return this.validatedInput?.input ?? new ValidatedInput<I>().input;
+  }
+
+  /** @internal */
+  public setValidated(target: InputTarget, value: unknown): void {
+    (this.validatedInput ??= new ValidatedInput<I>()).set(target, value);
+  }
+
+  /** @internal */
+  public completeValidatedInput(): void {
+    (this.validatedInput ??= new ValidatedInput<I>()).complete();
+  }
+
+  /** @internal */
+  public readContractInput(target: InputTarget): Promise<unknown> | unknown {
+    switch (target) {
+      case 'body':
+        return readContractBody(() => this._context.req.arrayBuffer(), this._context.req.header('content-type') ?? '');
+      case 'form':
+        return readContractForm(() => this.getFormData(), this._context.req.header('content-type') ?? '');
+      case 'query':
+        return this.getAllQueries();
+      case 'headers':
+        return (() => {
+          const headers: Record<string, string> = {};
+          this._context.req.raw.headers.forEach((value, key) => {
+            headers[key.toLowerCase()] = value;
+          });
+          return headers;
+        })();
+      case 'params':
+        return this._context.req.param();
+    }
+  }
+
   private _context: Context;
 
   private _server?: Server<never>;
@@ -73,7 +122,7 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
     this._server = server;
   }
 
-  public get req() {
+  public get req(): HonoRequest<any, any> {
     return this._context.req;
   }
 
@@ -137,16 +186,17 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
    * keys into arrays and applies coercions into `req.valid('form')`, while `parseBody()` without
    * options is last-value-wins - so the handler read a shape the schema had already replaced.
    */
-  public getParseBody(): Promise<any> {
+  public getParseBody<T = keyof I extends never ? any : InputOutput<I, 'form'>>(): Promise<T> {
     try {
+      if (this.validatedInput?.has('form')) return Promise.resolve(this.validatedInput.get('form') as T);
       // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
       const validated = this._context.req.valid?.('form' as never);
 
       if (validated !== undefined) {
-        return Promise.resolve(validated);
+        return Promise.resolve(validated as T);
       }
 
-      return this._context.req.parseBody();
+      return this._context.req.parseBody() as Promise<T>;
     } catch (error) {
       return Promise.reject(error as Error);
     }
@@ -176,8 +226,9 @@ export class HonoContextWrapper implements AsenaContext<HonoRequest<any, any>, R
    *
    * Routes without a validator are unaffected - `valid('json')` is undefined and we fall through.
    */
-  public getBody<T>(): Promise<T> {
+  public getBody<T = keyof I extends never ? any : InputOutput<I, 'body'>>(): Promise<T> {
     try {
+      if (this.validatedInput?.has('body')) return Promise.resolve(this.validatedInput.get('body') as T);
       // Not `??`: a schema may legitimately parse to `null`, which would fall back to the raw body.
       const validated = this._context.req.valid?.('json' as never) as T | undefined;
 
