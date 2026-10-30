@@ -2,9 +2,20 @@ import { describe, expect, it, afterEach, mock } from 'bun:test';
 import type { Server } from 'bun';
 import { AsenaWebSocketService } from '@asenajs/asena/web-socket';
 import type { BaseMiddleware } from '@asenajs/asena/adapter';
-import { CorsMiddleware, WebSocketOriginMiddleware } from '../lib/defaults';
+import { AsenaServerFactory } from '@asenajs/asena';
+import { Middleware, WebSocket as WebSocketNamespace } from '@asenajs/asena/decorators';
+import type { ServerLogger } from '@asenajs/asena/logger';
+import { CorsMiddleware, MiddlewareService, WebSocketOriginMiddleware } from '../lib/defaults';
 import type { Context as HonoAdapterContext } from '../lib/defaults';
+import { createHonoAdapter } from '../lib/utils/createHonoAdapter';
 import { createTestAdapter, startTestServer } from './utils/testHelpers';
+
+const silentLogger = (): ServerLogger => ({
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  profile: () => {},
+});
 
 class CountingWebSocketService extends AsenaWebSocketService<any> {
   public opened = 0;
@@ -157,5 +168,84 @@ describe('WebSocketOriginMiddleware', () => {
     // cross-site session's cookie.
     expect(authCalls).toBe(0);
     expect(service.opened).toBe(0);
+  });
+});
+
+let diSessionAuthCalls = 0;
+let diOpened = 0;
+
+@Middleware()
+class ChatOrigin extends WebSocketOriginMiddleware {
+  public constructor() {
+    super({ allowedOrigins: ['https://app.example'] });
+  }
+}
+
+@Middleware()
+class SessionAuth extends MiddlewareService {
+  public async handle(_context: HonoAdapterContext, next: () => Promise<void>): Promise<any> {
+    diSessionAuthCalls++;
+
+    return await next();
+  }
+}
+
+@WebSocketNamespace({ path: 'chat', middlewares: [ChatOrigin, SessionAuth] })
+class ChatSocket extends AsenaWebSocketService<any> {
+  protected async onOpen(_ws: any) {
+    diOpened++;
+  }
+}
+
+describe('WebSocketOriginMiddleware registered through @WebSocket({ middlewares })', () => {
+  let app: any;
+
+  afterEach(async () => {
+    await app?.stop();
+    app = undefined;
+  });
+
+  const boot = async (): Promise<number> => {
+    const port = 10000 + Math.floor(Math.random() * 22000);
+    const [adapter] = createHonoAdapter(silentLogger());
+
+    diSessionAuthCalls = 0;
+    diOpened = 0;
+    app = await AsenaServerFactory.create({
+      adapter: adapter as any,
+      logger: silentLogger(),
+      port,
+      components: [ChatOrigin, SessionAuth, ChatSocket],
+    });
+    await app.start();
+
+    return port;
+  };
+
+  const handshake = (port: number, origin: string) =>
+    fetch(`http://localhost:${port}/chat`, {
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': btoa('0123456789abcdef'),
+        Origin: origin,
+        Cookie: 'session=ok',
+      },
+    });
+
+  it('should reject a disallowed origin before the session middleware runs', async () => {
+    const port = await boot();
+
+    expect((await handshake(port, 'https://evil.example')).status).toBe(403);
+    expect(diSessionAuthCalls).toBe(0);
+    expect(diOpened).toBe(0);
+  });
+
+  it('should upgrade an allowed origin through the session middleware', async () => {
+    const port = await boot();
+
+    expect((await handshake(port, 'https://app.example')).status).toBe(101);
+    expect(diSessionAuthCalls).toBe(1);
   });
 });
