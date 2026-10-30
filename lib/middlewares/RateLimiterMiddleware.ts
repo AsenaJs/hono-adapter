@@ -136,6 +136,11 @@ export interface RateLimiterOptions {
    * A hop the client wrote itself (`X-Forwarded-For: <forged>, <real>`) is never selected: selection
    * starts from the right and stops at the first untrusted address.
    *
+   * Both misconfigurations below fail closed - every client lands in one bucket:
+   * - `true` behind two or more proxy layers keys on the outer proxy (the rightmost hop); list every
+   *   proxy, or use a predicate, instead.
+   * - A trusted peer that sends no usable `X-Forwarded-For` keys on the peer itself; logged once.
+   *
    * @default false
    */
   trustProxy?: boolean | string[] | ((address: string) => boolean);
@@ -324,6 +329,8 @@ export class RateLimiterMiddleware extends MiddlewareService {
    * Bucket TTL in milliseconds
    */
   private readonly bucketTTL: number;
+
+  private warnedNoForwardedFor = false;
 
   /**
    * Creates a new rate limiter middleware instance
@@ -525,13 +532,34 @@ export class RateLimiterMiddleware extends MiddlewareService {
 
     const hops = this.forwardedHops(context);
 
+    if (!hops.length) {
+      this.warnNoForwardedFor(peer);
+
+      return peer ?? 'unknown';
+    }
+
     for (let i = hops.length - 1; i >= 0; i--) {
       if (!this.trusts(hops[i])) {
         return hops[i];
       }
     }
 
-    return hops.at(-1) ?? peer ?? 'unknown';
+    return hops.at(-1);
+  }
+
+  /**
+   * Warn, once per instance, that a trusted peer forwarded no usable `X-Forwarded-For`
+   *
+   * @param peer - The trusted peer address
+   */
+  private warnNoForwardedFor(peer: string | null): void {
+    if (this.warnedNoForwardedFor) return;
+
+    this.warnedNoForwardedFor = true;
+    console.warn(
+      `RateLimiterMiddleware: trusted proxy ${peer ?? '(no peer address)'} sent no usable X-Forwarded-For; ` +
+        'every client behind it shares one bucket. Make the proxy append X-Forwarded-For or narrow trustProxy.',
+    );
   }
 
   /**
