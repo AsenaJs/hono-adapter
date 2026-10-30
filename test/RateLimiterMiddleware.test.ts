@@ -421,6 +421,18 @@ describe('RateLimiterMiddleware — Integration', () => {
       return { baseUrl, rl: rl! };
     };
 
+    const probePeer = async (): Promise<string> => {
+      const { baseUrl } = await startWith({});
+      const { peer } = (await (await fetch(`${baseUrl}/peer`)).json()) as { peer: string };
+
+      server?.stop(true);
+      server = undefined;
+      rateLimiter?.destroy();
+      rateLimiter = undefined;
+
+      return peer;
+    };
+
     it('should treat a varying X-Forwarded-For as one client', async () => {
       const { baseUrl, rl } = await startWith({ capacity: 2, refillRate: 0.01 });
 
@@ -504,6 +516,47 @@ describe('RateLimiterMiddleware — Integration', () => {
       peer = ((await (await fetch(`${baseUrl}/peer`)).json()) as { peer: string | null }).peer;
 
       expect(peer).not.toBeNull();
+
+      const results = await statuses(
+        baseUrl,
+        ['4.4.4.4', '5.5.5.6', '6.6.6.6'].map((forged) => ({
+          'X-Forwarded-For': `${forged}, 5.5.5.5, 10.0.0.1`,
+        })),
+      );
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('5.5.5.5')).toBeDefined();
+      expect(rl.getBucketState('10.0.0.1')).toBeUndefined();
+    });
+
+    it('should match a plain IPv4 list entry against an IPv4-mapped hop and peer', async () => {
+      const plainPeer = (await probePeer()).replace(/^::ffff:/i, '');
+      const { baseUrl, rl } = await startWith({
+        capacity: 2,
+        refillRate: 0.01,
+        trustProxy: [plainPeer, '10.0.0.1'],
+      });
+
+      const results = await statuses(
+        baseUrl,
+        ['4.4.4.4', '5.5.5.6', '6.6.6.6'].map((forged) => ({
+          'X-Forwarded-For': `${forged}, 5.5.5.5, ::ffff:10.0.0.1`,
+        })),
+      );
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('5.5.5.5')).toBeDefined();
+    });
+
+    it('should match an IPv4-mapped list entry against a plain IPv4 hop', async () => {
+      const peer = await probePeer();
+
+      // A proxy writes the hop it saw as plain IPv4 while the list follows Bun's dual-stack form
+      const { baseUrl, rl } = await startWith({
+        capacity: 2,
+        refillRate: 0.01,
+        trustProxy: [peer, '::ffff:10.0.0.1'],
+      });
 
       const results = await statuses(
         baseUrl,

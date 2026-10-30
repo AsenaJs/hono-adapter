@@ -52,6 +52,10 @@ import { OnStop } from '@asenajs/asena/decorators/ioc';
 
 const MAX_FORWARDED_HEADER_LENGTH = 1024;
 
+const IPV4_MAPPED_PREFIX = /^::ffff:(?=\d{1,3}(?:\.\d{1,3}){3}$)/i;
+
+const unmapIPv4 = (address: string): string => address.replace(IPV4_MAPPED_PREFIX, '');
+
 /**
  * Token bucket for a single client
  */
@@ -123,9 +127,10 @@ export interface RateLimiterOptions {
    * - `true`: one proxy layer in front of the server. The header is read and its rightmost entry - the
    *   one the proxy appended - is the client. Also the right setting when the server listens on a unix
    *   socket (no peer address to check).
-   * - `string[]`: exact peer addresses of the trusted proxies, in the form Bun reports them
-   *   (`'::ffff:10.0.0.1'` for IPv4 over a dual-stack listener, `'::1'` for loopback). Entries are
-   *   walked from the right; the first one not in the list is the client.
+   * - `string[]`: exact addresses of the trusted proxies. An IPv4 address matches whether it is written
+   *   plain (`'10.0.0.1'`) or IPv4-mapped (`'::ffff:10.0.0.1'`, how Bun reports it on a dual-stack
+   *   listener), in the list, the peer and the forwarded hops alike. Entries are walked from the right;
+   *   the first one not in the list is the client.
    * - `(address) => boolean`: same walk with a predicate (CIDR checks live here).
    *
    * A hop the client wrote itself (`X-Forwarded-For: <forged>, <real>`) is never selected: selection
@@ -539,7 +544,11 @@ export class RateLimiterMiddleware extends MiddlewareService {
     if (this.trustProxy === true) return true;
     if (!this.trustProxy || address === null) return false;
 
-    return Array.isArray(this.trustProxy) ? this.trustProxy.includes(address) : this.trustProxy(address);
+    if (!Array.isArray(this.trustProxy)) return this.trustProxy(address);
+
+    const normalized = unmapIPv4(address);
+
+    return this.trustProxy.some((entry) => unmapIPv4(entry) === normalized);
   }
 
   /**
