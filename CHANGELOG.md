@@ -1,5 +1,11 @@
 # @asenajs/hono-adapter
 
+## 5.0.1
+
+### Patch Changes
+
+- 4d2e63e: `getQuery()` returns the same result as `c.req.query()` when a percent- or plus-encoded key earlier in the query string decodes to the requested name.
+
 ## 5.0.0
 
 ### Major Changes
