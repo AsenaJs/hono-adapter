@@ -1,5 +1,11 @@
 # @asenajs/hono-adapter
 
+## 5.0.2
+
+### Patch Changes
+
+- cdda706: `setValue` now rejects a wrong value for a key declared on `AsenaVariables` (including the built-in `authSession`). The untyped fallback overload no longer matches known keys, matching the core `AsenaContext` contract.
+
 ## 5.0.1
 
 ### Patch Changes
