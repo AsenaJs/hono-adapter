@@ -1,6 +1,6 @@
 # Asena Hono Adapter
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/AsenaJs/hono-adapter)
+[![Version](https://img.shields.io/npm/v/@asenajs/hono-adapter.svg)](https://github.com/AsenaJs/hono-adapter)
 [![Bun Version](https://img.shields.io/badge/Bun-1.4%2B-blueviolet)](https://bun.sh)
 
 HTTP and WebSocket adapter implementation based on Hono web framework for Asena.js.
