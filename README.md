@@ -1,171 +1,65 @@
+<p width="%100" align="center">
+  <img src="https://avatars.githubusercontent.com/u/179836938?s=200&v=4" width="150" align="center"/>
+</p>
+
 # Asena Hono Adapter
 
-[![Version](https://img.shields.io/npm/v/@asenajs/hono-adapter.svg)](https://github.com/AsenaJs/hono-adapter)
+[![Version](https://img.shields.io/npm/v/@asenajs/hono-adapter.svg)](https://asena.sh/docs/adapters/hono)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Bun Version](https://img.shields.io/badge/Bun-1.4%2B-blueviolet)](https://bun.sh)
 
-HTTP and WebSocket adapter implementation based on Hono web framework for Asena.js.
+HTTP and WebSocket adapter for [Asena](https://asena.sh), built on the [Hono](https://hono.dev) web framework.
 
-## Features
-
-- Fast and modern API endpoints with [Hono](https://hono.dev/) web framework
-- High performance with Bun runtime
-- Full type support with TypeScript
-- HTTP and WebSocket adapter support
-- Easy integration and usage
-- Validation support with Zod
-- Decorators for controller-based routing
-
-Request pipeline order: global middlewares → route middlewares → validator → handler.
-
-## Requirements
-
-- [Bun](https://bun.sh) v1.4 or higher
-- [@asenajs/asena](https://github.com/AsenaJs/Asena) v0.12.0 or higher (peer dependency)
-- [Hono](https://hono.dev) v4.12.9 or higher (peer dependency)
-- [Zod](https://zod.dev) v4.3.6 or higher (peer dependency)
-- TypeScript v5.8.2 or above
+**Requirements:** Bun 1.4+, `@asenajs/asena` 0.12+, and `hono` + `zod` as peer dependencies your project installs.
 
 ## Installation
 
 ```bash
-bun add @asenajs/hono-adapter hono zod
+bun add @asenajs/asena @asenajs/hono-adapter @asenajs/asena-logger hono zod
 ```
-
-`hono` and `zod` are **peer dependencies** - this adapter offers the wrapper, your project owns the
-libraries it wraps. That is what keeps your code and the adapter on a single copy of `hono`; two
-copies mean two `HTTPException` classes, and a deliberate 403 thrown from the wrong one is answered
-500.
-
-| Package manager | Command |
-|:--|:--|
-| bun, npm 7+, pnpm 8+ | `bun add hono zod` — peers auto-install, but declare them anyway so they survive a clean install |
-| yarn 1 | `yarn add hono zod` — **required**, yarn 1 does not install peers for you |
-
 
 ## Usage
 
-### Server Setup (index.ts)
-
 ```typescript
-import { AsenaServer } from '@asenajs/asena';
-import { DefaultLogger } from "@asenajs/asena/logger";
-import { createHonoAdapter } from '@asenajs/hono-adapter';
-
-const [adapter, logger] = createHonoAdapter(new DefaultLogger());
-
-await new AsenaServer(adapter)
-  .logger(logger)
-  .port(3000)
-  .start(true);
-```
-
-### Controller Example
-
-```typescript
+// src/index.ts
+import { AsenaServerFactory } from '@asenajs/asena';
 import { Controller } from '@asenajs/asena/decorators';
 import { Get } from '@asenajs/asena/decorators/http';
-import type { Context } from '@asenajs/hono-adapter';
+import { createHonoAdapter, type Context } from '@asenajs/hono-adapter';
+import { AsenaLogger } from '@asenajs/asena-logger';
 
-@Controller()
-export class TestController {
-  @Get("/")
-  public async me(context: Context) {
-    return context.send("Hello World!");
+@Controller('/')
+class HelloController {
+  @Get('/')
+  async hello(context: Context) {
+    return context.send('Hello World!');
   }
 }
-```
 
-## API Documentation
+const [adapter, logger] = createHonoAdapter({ logger: new AsenaLogger() });
 
-### createHonoAdapter(logger, options)
-
-Helper function used to create a Hono adapter.
-
-**Parameters:**
-- `logger` (Logger): Logger instance from Asena
-
-**Returns:**
-- A tuple with [adapter, logger]
-
-## Testing
-
-Asena Hono Adapter uses Bun's built-in test framework for unit and integration testing.
-
-### Running Tests
-
-```bash
-# Run all tests
-bun test
-
-# Run tests with watch mode
-bun test:watch
-
-# Run tests with coverage report
-bun test:coverage
-```
-
-### Test Structure
-
-- **Unit Tests**: Test individual components in isolation
-  - `HonoAdapter.test.ts` - Tests for the HTTP adapter
-  - `HonoContextWrapper.test.ts` - Tests for the context wrapper
-  - `HonoWebsocketAdapter.test.ts` - Tests for the WebSocket adapter
-
-- **Integration Tests**: Test how components work together
-  - `integration.test.ts` - End-to-end tests for the adapter
-
-### Writing Tests
-
-Example test for a controller:
-
-```typescript
-import { describe, expect, it } from "bun:test";
-import { AsenaServer } from "@asenajs/asena";
-import { createHonoAdapter } from "@asenajs/hono-adapter";
-import { DefaultLogger } from "@asenajs/asena/logger";
-import { YourController } from "../path/to/your/controller";
-
-describe("YourController", () => {
-  let server;
-  let baseUrl;
-  
-  beforeEach(async () => {
-    // 10000-31999: below the kernel's ephemeral floor (net.ipv4.ip_local_port_range,
-    // 32768-60999). A server port drawn from that range collides with the outbound
-    // sockets the suite itself holds open - TIME_WAIT included - and Bun.serve then
-    // fails with EADDRINUSE, randomly, in whichever test happened to draw it.
-    const port = 10000 + Math.floor(Math.random() * 22000);
-    const [adapter, logger] = createHonoAdapter(new DefaultLogger());
-    const app = new AsenaServer(adapter).logger(logger).port(port);
-    
-    app.register(YourController);
-    
-    server = await app.start();
-    baseUrl = `http://localhost:${port}`;
-  });
-  
-  afterEach(() => {
-    server.stop();
-  });
-  
-  it("should respond correctly", async () => {
-    const response = await fetch(`${baseUrl}/your-endpoint`);
-    const data = await response.json();
-    
-    expect(response.status).toBe(200);
-    expect(data).toEqual({ /* expected response */ });
-  });
+const server = await AsenaServerFactory.create({
+  adapter,
+  logger,
+  port: 3000,
+  components: [HelloController],
 });
+
+await server.start();
 ```
 
-## Development
+## Documentation
 
-To run the project in development mode:
+Full documentation: [asena.sh/docs/adapters/hono](https://asena.sh/docs/adapters/hono)
 
-```bash
-bun run build
-```
+## Contributing
+
+Contributions are welcome! Submit a Pull Request on [GitHub](https://github.com/AsenaJs/hono-adapter).
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file.
+
+## Support
+
+Issues or questions? Open an issue on [GitHub](https://github.com/AsenaJs/hono-adapter/issues).
