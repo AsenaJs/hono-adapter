@@ -438,7 +438,8 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   }
 
   public setValue<K extends keyof AsenaVariables>(key: K, value: AsenaVariables[K]): void;
-  public setValue(key: string, value: any): void;
+  // A known key resolves to `never` here, so a wrong value cannot fall through to the `any` overload.
+  public setValue<K extends string>(key: K extends keyof AsenaVariables ? never : K, value: any): void;
   public setValue(key: string, value: any): void {
     this._context.set(key, value);
   }
