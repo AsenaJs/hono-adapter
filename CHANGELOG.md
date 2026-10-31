@@ -1,5 +1,29 @@
 # @asenajs/hono-adapter
 
+## 5.0.0
+
+### Major Changes
+
+- 3e2970c: **Breaking:** `RateLimiterMiddleware` identifies the client by the connecting peer address (`context.getRequestIp()`) instead of `X-Forwarded-For` / `CF-Connecting-IP`, which any client could set to get a fresh bucket per request. Behind a reverse proxy set the new `trustProxy` option (`true` for one proxy layer or a unix-socket listener, `string[]` of proxy addresses, or a predicate); the client is the rightmost `X-Forwarded-For` entry not written by a trusted proxy, so a forged left entry is never used. `CF-Connecting-IP` is no longer consulted (Cloudflare also appends to `X-Forwarded-For`; use a `keyGenerator` if you need it). Headers over 1024 characters are ignored. New `maxBuckets` (default 10000) bounds memory: the least recently seen client is evicted and starts with a full bucket.
+
+  Two `trustProxy` misconfigurations put every client in one bucket: `true` behind two or more proxy layers (the outer proxy becomes the key; list every proxy instead), and a trusted peer that sends no usable `X-Forwarded-For` (the peer becomes the key; a warning is logged once).
+
+### Minor Changes
+
+- 055006e: Add `Context.define()` route contracts with typed, validated request inputs across JSON, forms,
+  query strings, parameters, and headers. Add `validatorCache` for legacy validator factories and
+  require `@asenajs/asena` 0.12.0 for the shared metadata and validation contract.
+- 402b289: Route-level middlewares now run before the route's validator, so an auth or rate-limit middleware sees every request and an unauthenticated request never reaches validation. Global middlewares are unchanged. If a route middleware relied on the body having been validated first, it must validate itself now.
+
+  The peer range for `@asenajs/asena` is widened to `^0.11.0 || ^0.12.0` so the adapter can be used with core 0.12.0, which ships the auth contract this ordering aligns with.
+
+- 0c83280: Adds `WebSocketOriginMiddleware`: rejects a WebSocket handshake with 403 unless the `Origin` header is in `allowedOrigins` (list or predicate). Handshakes without an `Origin` are rejected too unless `allowMissingOrigin: true`. `CorsMiddleware` is not an origin policy — a disallowed origin still upgrades — so cookie-authenticated WebSockets need this middleware in front of their auth.
+
+### Patch Changes
+
+- 99e19f3: Faster request handling: static files are served through a Bun `serveStatic` wrapper that stats synchronously, request headers are read in one pass, and validated routes without a hook take fewer async steps.
+- a2993ae: A WebSocket handshake ran every global middleware twice: once from the top-level `app.use()` registration and once more from the WebSocket route's own chain. It now runs them once, like HTTP routes — a global rate limiter charges one token per handshake, a global logger writes one line.
+
 ## 4.0.0
 
 ### Major Changes
