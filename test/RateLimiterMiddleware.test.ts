@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from 'bun:test';
+import { describe, expect, it, afterEach, spyOn } from 'bun:test';
 import type { Server } from 'bun';
 import { RateLimiterMiddleware } from '../lib/middlewares/RateLimiterMiddleware';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -155,8 +155,8 @@ describe('RateLimiterMiddleware — Integration', () => {
   // ─── Per-Client Isolation ─────────────────────────────────────────
 
   describe('Per-Client Isolation', () => {
-    it('should use separate buckets for different IPs', async () => {
-      const { adapter } = setupRateLimitedAdapter({ capacity: 1, refillRate: 0.01 });
+    it('should use separate buckets for different forwarded IPs behind a trusted proxy', async () => {
+      const { adapter } = setupRateLimitedAdapter({ capacity: 1, refillRate: 0.01, trustProxy: true });
 
       await registerRoute(adapter, {
         path: '/api/data',
@@ -383,11 +383,321 @@ describe('RateLimiterMiddleware — Integration', () => {
     });
   });
 
+  // ─── Client Identity ─────────────────────────────────────────────
+
+  // Any client could set X-Forwarded-For or CF-Connecting-IP and get a fresh bucket per request,
+  // which made the limiter a no-op against exactly the traffic it exists to stop. The peer
+  // address is the one identifier the client cannot choose.
+  describe('Client identity', () => {
+    const statuses = async (baseUrl: string, headerSets: Record<string, string>[]): Promise<number[]> => {
+      const collected: number[] = [];
+
+      for (const headers of headerSets) {
+        const response = await fetch(`${baseUrl}/api/data`, { headers });
+
+        collected.push(response.status);
+      }
+
+      return collected;
+    };
+
+    const startWith = async (options: ConstructorParameters<typeof RateLimiterMiddleware>[0]) => {
+      const { adapter, rateLimiter: rl } = setupRateLimitedAdapter(options);
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+      });
+
+      await registerRoute(adapter, {
+        path: '/peer',
+        handler: (ctx) => ctx.send({ peer: ctx.getRequestIp() }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+
+      server = s;
+
+      return { baseUrl, rl: rl! };
+    };
+
+    const probePeer = async (): Promise<string> => {
+      const { baseUrl } = await startWith({});
+      const { peer } = (await (await fetch(`${baseUrl}/peer`)).json()) as { peer: string };
+
+      server?.stop(true);
+      server = undefined;
+      rateLimiter?.destroy();
+      rateLimiter = undefined;
+
+      return peer;
+    };
+
+    it('should treat a varying X-Forwarded-For as one client', async () => {
+      const { baseUrl, rl } = await startWith({ capacity: 2, refillRate: 0.01 });
+
+      const results = await statuses(baseUrl, [
+        { 'X-Forwarded-For': '1.1.1.1' },
+        { 'X-Forwarded-For': '2.2.2.2' },
+        { 'X-Forwarded-For': '3.3.3.3' },
+      ]);
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('1.1.1.1')).toBeUndefined();
+    });
+
+    it('should ignore CF-Connecting-IP', async () => {
+      const { baseUrl, rl } = await startWith({ capacity: 2, refillRate: 0.01 });
+
+      const results = await statuses(baseUrl, [
+        { 'CF-Connecting-IP': '8.8.8.8' },
+        { 'CF-Connecting-IP': '8.8.4.4' },
+        { 'CF-Connecting-IP': '1.0.0.1' },
+      ]);
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('8.8.8.8')).toBeUndefined();
+    });
+
+    it('should key on the forwarded hop when the peer is a trusted proxy', async () => {
+      const { baseUrl, rl } = await startWith({ capacity: 1, refillRate: 0.01, trustProxy: true });
+
+      const results = await statuses(baseUrl, [
+        { 'X-Forwarded-For': '1.1.1.1' },
+        { 'X-Forwarded-For': '1.1.1.1' },
+        { 'X-Forwarded-For': '2.2.2.2' },
+      ]);
+
+      expect(results).toEqual([200, 429, 200]);
+      expect(rl.getBucketState('1.1.1.1')).toBeDefined();
+    });
+
+    it('should take the rightmost hop and ignore one the client forged on the left', async () => {
+      const { baseUrl, rl } = await startWith({ capacity: 2, refillRate: 0.01, trustProxy: true });
+
+      const forged = ['4.4.4.4', '5.5.5.5', '6.6.6.6'];
+      const results = await statuses(
+        baseUrl,
+        forged.map((hop) => ({ 'X-Forwarded-For': `${hop}, 9.9.9.9` })),
+      );
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('9.9.9.9')).toBeDefined();
+
+      for (const hop of forged) {
+        expect(rl.getBucketState(hop)).toBeUndefined();
+      }
+    });
+
+    it('should ignore the header when the peer is not a listed proxy', async () => {
+      const { baseUrl, rl } = await startWith({ capacity: 2, refillRate: 0.01, trustProxy: ['10.0.0.1'] });
+
+      const results = await statuses(baseUrl, [
+        { 'X-Forwarded-For': '1.1.1.1' },
+        { 'X-Forwarded-For': '2.2.2.2' },
+        { 'X-Forwarded-For': '3.3.3.3' },
+      ]);
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('1.1.1.1')).toBeUndefined();
+    });
+
+    it('should walk past every trusted proxy and stop at the client hop', async () => {
+      // The peer form varies by listener (`::1`, `::ffff:127.0.0.1`), so it is read back from the
+      // server rather than hardcoded.
+      let peer: string | null = null;
+
+      const { baseUrl, rl } = await startWith({
+        capacity: 2,
+        refillRate: 0.01,
+        trustProxy: (address) => address === '10.0.0.1' || address === peer,
+      });
+
+      peer = ((await (await fetch(`${baseUrl}/peer`)).json()) as { peer: string | null }).peer;
+
+      expect(peer).not.toBeNull();
+
+      const results = await statuses(
+        baseUrl,
+        ['4.4.4.4', '5.5.5.6', '6.6.6.6'].map((forged) => ({
+          'X-Forwarded-For': `${forged}, 5.5.5.5, 10.0.0.1`,
+        })),
+      );
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('5.5.5.5')).toBeDefined();
+      expect(rl.getBucketState('10.0.0.1')).toBeUndefined();
+    });
+
+    it('should match a plain IPv4 list entry against an IPv4-mapped hop and peer', async () => {
+      const plainPeer = (await probePeer()).replace(/^::ffff:/i, '');
+      const { baseUrl, rl } = await startWith({
+        capacity: 2,
+        refillRate: 0.01,
+        trustProxy: [plainPeer, '10.0.0.1'],
+      });
+
+      const results = await statuses(
+        baseUrl,
+        ['4.4.4.4', '5.5.5.6', '6.6.6.6'].map((forged) => ({
+          'X-Forwarded-For': `${forged}, 5.5.5.5, ::ffff:10.0.0.1`,
+        })),
+      );
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('5.5.5.5')).toBeDefined();
+    });
+
+    it('should match an IPv4-mapped list entry against a plain IPv4 hop', async () => {
+      const peer = await probePeer();
+
+      // A proxy writes the hop it saw as plain IPv4 while the list follows Bun's dual-stack form
+      const { baseUrl, rl } = await startWith({
+        capacity: 2,
+        refillRate: 0.01,
+        trustProxy: [peer, '::ffff:10.0.0.1'],
+      });
+
+      const results = await statuses(
+        baseUrl,
+        ['4.4.4.4', '5.5.5.6', '6.6.6.6'].map((forged) => ({
+          'X-Forwarded-For': `${forged}, 5.5.5.5, 10.0.0.1`,
+        })),
+      );
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('5.5.5.5')).toBeDefined();
+      expect(rl.getBucketState('10.0.0.1')).toBeUndefined();
+    });
+
+    it('should warn once when a trusted peer sends no X-Forwarded-For', async () => {
+      const warn = spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        const { baseUrl } = await startWith({ capacity: 10, refillRate: 0.01, trustProxy: true });
+
+        await statuses(baseUrl, [{}, {}, {}]);
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toContain('X-Forwarded-For');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('should not warn when the trusted peer forwards the client hop', async () => {
+      const warn = spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        const { baseUrl } = await startWith({ capacity: 10, refillRate: 0.01, trustProxy: true });
+
+        await statuses(baseUrl, [{ 'X-Forwarded-For': '1.1.1.1' }, { 'X-Forwarded-For': '2.2.2.2' }]);
+
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('should fall back to the peer when the forwarded header is over-long', async () => {
+      const { baseUrl, rl } = await startWith({ capacity: 2, refillRate: 0.01, trustProxy: true });
+
+      const longHeader = (seed: number) => `${seed}.0.0.1, ` + '9.9.9.9, '.repeat(130) + '8.8.8.8';
+
+      expect(longHeader(1).length).toBeGreaterThan(1024);
+
+      const results = await statuses(
+        baseUrl,
+        [1, 2, 3].map((seed) => ({ 'X-Forwarded-For': longHeader(seed) })),
+      );
+
+      expect(results).toEqual([200, 200, 429]);
+      expect(rl.getBucketState('8.8.8.8')).toBeUndefined();
+    });
+
+    it('should see the peer from a route-level limiter with no global middlewares', async () => {
+      const { adapter } = createTestAdapter();
+      const rl = new RateLimiterMiddleware({ capacity: 2, refillRate: 0.01, cleanupInterval: 0 });
+
+      rateLimiter = rl;
+
+      await registerRoute(adapter, {
+        path: '/api/data',
+        handler: (ctx) => ctx.send({ ok: true }),
+        // @ts-ignore
+        middlewares: [rl],
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+
+      server = s;
+
+      const results = await statuses(baseUrl, [
+        { 'X-Forwarded-For': '1.1.1.1' },
+        { 'X-Forwarded-For': '2.2.2.2' },
+        { 'X-Forwarded-For': '3.3.3.3' },
+      ]);
+
+      expect(results).toEqual([200, 200, 429]);
+      // 'unknown' would mean the context never got the server and every client shares one bucket
+      expect(rl.getBucketState('unknown')).toBeUndefined();
+    });
+
+    it('should evict the least recently seen client at maxBuckets and let it start over', async () => {
+      const { baseUrl, rl } = await startWith({
+        capacity: 1,
+        refillRate: 0.01,
+        maxBuckets: 2,
+        keyGenerator: (ctx) => ctx.req.header('x-client') || 'unknown',
+      });
+
+      const results = await statuses(baseUrl, [
+        { 'x-client': 'c1' },
+        { 'x-client': 'c1' },
+        { 'x-client': 'c2' },
+        { 'x-client': 'c3' },
+      ]);
+
+      // The cap trades strict enforcement for bounded memory: c1 was evicted, so its next request
+      // starts with a full bucket instead of the 429 it had earned.
+      expect(results).toEqual([200, 429, 200, 200]);
+      expect(rl.getBucketState('c1')).toBeUndefined();
+      expect(rl.getBucketState('c2')).toBeDefined();
+      expect(rl.getBucketState('c3')).toBeDefined();
+
+      const [readmitted] = await statuses(baseUrl, [{ 'x-client': 'c1' }]);
+
+      expect(readmitted).toBe(200);
+      expect(rl.getBucketState('c2')).toBeUndefined();
+    });
+
+    it('should evict the idle client rather than the recently seen one', async () => {
+      const { baseUrl, rl } = await startWith({
+        capacity: 5,
+        refillRate: 0.01,
+        maxBuckets: 2,
+        keyGenerator: (ctx) => ctx.req.header('x-client') || 'unknown',
+      });
+
+      // c1 is touched again after c2, so insertion order alone (c1, c2) is not the eviction order
+      await statuses(baseUrl, [{ 'x-client': 'c1' }, { 'x-client': 'c2' }, { 'x-client': 'c1' }, { 'x-client': 'c3' }]);
+
+      expect(rl.getBucketState('c2')).toBeUndefined();
+      expect(rl.getBucketState('c1')).toBeDefined();
+      expect(rl.getBucketState('c3')).toBeDefined();
+    });
+  });
+
   // ─── Bucket Management ────────────────────────────────────────────
 
   describe('Bucket Management', () => {
     it('getBucketState() should return bucket info after request', async () => {
-      const { adapter, rateLimiter: rl } = setupRateLimitedAdapter({ capacity: 10, refillRate: 1 });
+      // Trusted so the bucket key is the forwarded address this test can name
+      const { adapter, rateLimiter: rl } = setupRateLimitedAdapter({
+        capacity: 10,
+        refillRate: 1,
+        trustProxy: true,
+      });
 
       await registerRoute(adapter, {
         path: '/api/data',
@@ -407,9 +717,11 @@ describe('RateLimiterMiddleware — Integration', () => {
     });
 
     it('clearBuckets() should reset state', async () => {
+      // Trusted so the bucket key is the forwarded address this test can name
       const { adapter, rateLimiter: rl } = setupRateLimitedAdapter({
         capacity: 1,
         refillRate: 0.01,
+        trustProxy: true,
       });
 
       await registerRoute(adapter, {
@@ -448,6 +760,8 @@ describe('RateLimiterMiddleware — Integration', () => {
         refillRate: 1,
         cleanupInterval: 50,
         bucketTTL: 50,
+        // Trusted so the bucket key is the forwarded address this test can name
+        trustProxy: true,
       });
       rateLimiter = rl;
 
@@ -479,7 +793,7 @@ describe('RateLimiterMiddleware — Integration', () => {
   // ─── Edge Cases ───────────────────────────────────────────────────
 
   describe('Edge Cases', () => {
-    it('should handle unknown IP gracefully', async () => {
+    it('should key on the connecting peer when no proxy is trusted', async () => {
       const { adapter } = setupRateLimitedAdapter({ capacity: 10, refillRate: 1 });
 
       await registerRoute(adapter, {
@@ -493,27 +807,6 @@ describe('RateLimiterMiddleware — Integration', () => {
       // No IP headers — should use fallback key
       const res = await fetch(`${baseUrl}/api/data`);
       expect(res.status).toBe(200);
-    });
-
-    it('should use CF-Connecting-IP as fallback', async () => {
-      const { adapter, rateLimiter: rl } = setupRateLimitedAdapter({
-        capacity: 10,
-        refillRate: 1,
-      });
-
-      await registerRoute(adapter, {
-        path: '/api/data',
-        handler: (ctx) => ctx.send({ ok: true }),
-      });
-
-      const { server: s, baseUrl } = await startTestServer(adapter);
-      server = s;
-
-      await fetch(`${baseUrl}/api/data`, {
-        headers: { 'CF-Connecting-IP': '8.8.8.8' },
-      });
-
-      expect(rl!.getBucketState('8.8.8.8')).toBeDefined();
     });
 
     it('should immediately rate limit with zero capacity', async () => {
@@ -530,5 +823,30 @@ describe('RateLimiterMiddleware — Integration', () => {
       const res = await fetch(`${baseUrl}/api/data`);
       expect(res.status).toBe(429);
     });
+  });
+});
+
+describe('RateLimiterMiddleware — maxBuckets validation', () => {
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])('should reject maxBuckets = %p', (maxBuckets) => {
+    expect(() => new RateLimiterMiddleware({ maxBuckets, cleanupInterval: 0 })).toThrow(
+      /maxBuckets must be a positive integer/,
+    );
+  });
+
+  it('should accept maxBuckets = 1 and hold at most one bucket', async () => {
+    const rl = new RateLimiterMiddleware({
+      maxBuckets: 1,
+      cleanupInterval: 0,
+      keyGenerator: (ctx) => ctx.req.header('x-client') || 'unknown',
+    });
+    const context = (client: string) => ({ req: { header: () => client }, setResponseHeader: () => {} }) as any;
+
+    await rl.handle(context('c1'), async () => {});
+    await rl.handle(context('c2'), async () => {});
+
+    expect(rl.getBucketState('c1')).toBeUndefined();
+    expect(rl.getBucketState('c2')).toBeDefined();
+
+    rl.destroy();
   });
 });

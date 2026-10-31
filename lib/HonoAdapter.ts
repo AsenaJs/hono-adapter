@@ -10,7 +10,11 @@ import {
   type AsenaStartOptions,
   type BaseMiddleware,
   type BaseValidator,
+  assertContextAdapter,
+  assertRouteContract,
+  ASENA_CONTEXT_CONTRACT,
   isHttpException,
+  prepareContextValidation,
   type RouteParams,
   VALIDATOR_METHODS,
   type ValidatorHandler,
@@ -35,7 +39,7 @@ import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
 import { HonoWebsocketAdapter } from './HonoWebsocketAdapter';
 import type { WebSocketData } from '@asenajs/asena/web-socket';
-import { serveStatic } from 'hono/bun';
+import { serveStatic } from './utils/serveStatic';
 
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
@@ -385,7 +389,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     this.hasNotFoundHandler = true;
 
     this.app.notFound(async (context) => {
-      const wrapper = new HonoContextWrapper(context, this.server);
+      const wrapper = this.getRequestWrapper(context);
 
       try {
         const response = await notFoundHandler(wrapper, {
@@ -457,7 +461,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     this.app.onError(async (error, context) => {
       // Wrap context for user handler
-      const wrapper = new HonoContextWrapper(context, this.server);
+      const wrapper = this.getRequestWrapper(context);
 
       try {
         const customResponse = await errorHandler(error, wrapper);
@@ -597,7 +601,14 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   private prepareHandler(handler: HonoHandler): Handler {
-    return (c: Context) => handler(new HonoContextWrapper(c, this.server));
+    return (c: Context) => handler(this.getRequestWrapper(c));
+  }
+
+  private getRequestWrapper(context: Context): HonoContextWrapper {
+    return (
+      (context.get('_asenaContextWrapper') as HonoContextWrapper | undefined) ??
+      new HonoContextWrapper(context, this.server)
+    );
   }
 
   /**
@@ -643,7 +654,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           }
 
           // Call user callback
-          await staticServe.onFound.handler(path, new HonoContextWrapper(c, this.server));
+          await staticServe.onFound.handler(path, this.getRequestWrapper(c));
         };
       }
     } else if (staticServe.extra?.cacheControl || staticServe.extra?.headers) {
@@ -668,7 +679,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         staticServeOptions.onNotFound = staticServe.onNotFound.handler;
       } else {
         staticServeOptions.onNotFound = (path, c: Context) => {
-          staticServe.onNotFound.handler(path, new HonoContextWrapper(c, this.server));
+          staticServe.onNotFound.handler(path, this.getRequestWrapper(c));
         };
       }
     }
@@ -688,6 +699,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    */
   private async prepareValidator(
     baseValidator: BaseValidator<ValidationSchema | ValidationSchemaWithHook>,
+    cache: boolean,
+    routeLabel: string,
   ): Promise<MiddlewareHandler[]> {
     if (!baseValidator) {
       return [];
@@ -703,78 +716,71 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         continue;
       }
 
+      if (!cache) {
+        validators.push(async (context, next) => {
+          const schema = await validatorHandler.handle();
+          if (!schema) {
+            this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
+            return next();
+          }
+          return this.createValidatorMiddleware(schema, key)(context, next);
+        });
+        continue;
+      }
+
       try {
-        const validationSchema = await validatorHandler.handle();
-
-        // Validate that we got a valid schema
-        if (!validationSchema) {
+        const schema = await validatorHandler.handle();
+        if (!schema) {
           this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
-
           continue;
         }
-
-        let schema: ZodType<any, any, any>;
-        let hook: Hook<any, any, any> | undefined;
-
-        if (typeof validationSchema === 'object' && 'schema' in validationSchema) {
-          schema = validationSchema.schema;
-          hook = validationSchema.hook;
-
-          // Validate schema is actually a Zod schema
-          if (!schema || typeof schema.parse !== 'function') {
-            throw new Error(`Invalid Zod schema provided for '${key}' validator`);
-          }
-        } else {
-          schema = validationSchema as ZodType<never, never, never>;
-
-          if (!schema || typeof schema.parse !== 'function') {
-            throw new Error(`Invalid Zod schema provided for '${key}' validator`);
-          }
-        }
-
-        // The user hook runs first and wins if it answers the request, but it no
-        // longer *replaces* the default handling: a hook added for logging or
-        // context enrichment used to silently change that route's error contract
-        const validator = zValidator(key as keyof ValidationTargets, schema, async (result, c) => {
-          if (hook) {
-            const hookResult = await hook(result, c);
-
-            // Only the two forms zValidator itself honours short-circuit here; anything
-            // else falls through to the default so the contract stays consistent
-            if (hookResult instanceof Response) {
-              return hookResult;
-            }
-
-            if (hookResult && typeof hookResult === 'object' && 'response' in hookResult) {
-              return hookResult;
-            }
-          }
-
-          if (result.success) {
-            return;
-          }
-
-          // zValidator intersects the result union with `{ target }`, which stops TS
-          // narrowing it on `success`. The error type is also widened to a
-          // `$ZodError | ZodError` union because zValidator accepts zod-core schemas;
-          // ours are always classic `z.ZodType` (see ValidationSchema), so the runtime
-          // value is a classic ZodError.
-          const { error } = result as unknown as { error: ZodError };
-
-          return this.handleValidationFailure(error, key);
-        });
-
-        validators.push(validator);
+        validators.push(this.createValidatorMiddleware(schema, key));
       } catch (error) {
-        this.logger.error(`Failed to prepare validator for '${key}':`, error);
-
         throw new Error(
-          `Validator preparation failed for '${key}': ${error instanceof Error ? error.message : String(error)}`,
+          `Validator preparation failed for ${routeLabel} target '${key}': ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
         );
       }
     }
 
     return validators;
+  }
+
+  private createValidatorMiddleware(
+    validationSchema: ValidationSchema | ValidationSchemaWithHook,
+    key: string,
+  ): MiddlewareHandler {
+    const schema =
+      typeof validationSchema === 'object' && 'schema' in validationSchema
+        ? validationSchema.schema
+        : (validationSchema as ZodType<any, any, any>);
+    const hook: Hook<any, any, any> | undefined =
+      typeof validationSchema === 'object' && 'schema' in validationSchema ? validationSchema.hook : undefined;
+
+    if (!schema || typeof schema.parse !== 'function') {
+      throw new Error(`Invalid Zod schema provided for '${key}' validator`);
+    }
+
+    if (!hook) {
+      return zValidator(key as keyof ValidationTargets, schema, undefined, {
+        validationFunction: async (target, value) => {
+          const result = await target.safeParseAsync(value);
+
+          return result.success ? result : this.handleValidationFailure(result.error, key);
+        },
+      });
+    }
+
+    return zValidator(key as keyof ValidationTargets, schema, async (result, context) => {
+      if (hook) {
+        const hookResult = await hook(result, context);
+        if (hookResult instanceof Response) return hookResult;
+        if (hookResult && typeof hookResult === 'object' && 'response' in hookResult) return hookResult;
+      }
+      if (result.success) return;
+      const { error } = result as unknown as { error: ZodError };
+      return this.handleValidationFailure(error, key);
+    });
   }
 
   /**
@@ -838,32 +844,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         });
       }
     }
-  }
-
-  /**
-   * Gets global middlewares that should be applied to a specific path
-   *
-   * Filters global middlewares based on their include/exclude patterns.
-   * Pattern matching happens once during route registration (zero runtime overhead).
-   *
-   * @param path - The route path to check against middleware patterns
-   * @returns Array of middlewares that should be applied to this path
-   *
-   * @example
-   * ```typescript
-   * // If global middlewares are:
-   * // - authMiddleware with { include: ['/api/*'], exclude: ['/api/health'] }
-   * // - rateLimitMiddleware with no config
-   *
-   * getGlobalMiddlewaresForPath('/api/users')    // => [authMiddleware, rateLimitMiddleware]
-   * getGlobalMiddlewaresForPath('/api/health')   // => [rateLimitMiddleware]
-   * getGlobalMiddlewaresForPath('/public/file')  // => [rateLimitMiddleware]
-   * ```
-   */
-  private getGlobalMiddlewaresForPath(path: string): BaseMiddleware<HonoAdapterContext>[] {
-    return this.globalMiddlewares
-      .filter(({ config }) => shouldApplyMiddleware(path, config))
-      .map(({ middleware }) => middleware);
   }
 
   /**
@@ -950,18 +930,11 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Converts HTTP GET route to WebSocket upgrade endpoint
    */
   private async registerWebsocketRouteDirect(wsRoute: WebsocketRouteParams<HonoAdapterContext>): Promise<void> {
-    // Get filtered global middlewares for this WebSocket route
-    const applicableGlobalMiddlewares = this.getGlobalMiddlewaresForPath(wsRoute.path);
-    const preparedGlobalMiddlewares = this.prepareMiddlewares(applicableGlobalMiddlewares);
-
     const preparedMiddlewares = this.prepareMiddlewares(wsRoute.middlewares || []);
-
-    // Combine: global middlewares -> route middlewares
-    const allMiddlewares = [...preparedGlobalMiddlewares, ...preparedMiddlewares];
 
     const normalizedWsPath = this.normalizePath(`/${wsRoute.path}`);
 
-    (this.app as any).get(normalizedWsPath, ...allMiddlewares, async (c: Context, next) => {
+    (this.app as any).get(normalizedWsPath, ...preparedMiddlewares, async (c: Context, next) => {
       const websocketData = c.get('_websocketData') || {};
 
       const id = bun.randomUUIDv7();
@@ -987,11 +960,37 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   private async registerRouteDirect(
     route: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
   ): Promise<void> {
+    const routeLabel = `${route.method.toUpperCase()} ${route.path}`;
+    const contextClass = route.contextClass;
+    assertRouteContract(route, contextClass, routeLabel);
+    assertContextAdapter(contextClass, 'hono-adapter');
+
+    const routeWrapper: MiddlewareHandler[] = contextClass
+      ? [
+          async (context, next) => {
+            const wrapper = new contextClass(context, this.server) as HonoContextWrapper;
+            context.set('_asenaContextWrapper', wrapper);
+            await next();
+          },
+        ]
+      : [];
     const preparedMiddlewares = this.prepareMiddlewares(route.middlewares || []);
-    const validators = route.validator ? await this.prepareValidator(route.validator) : [];
+    const validators = route.validator
+      ? await this.prepareValidator(route.validator, route.validatorCache !== false, routeLabel)
+      : [];
+    const contract = route.contextContract ?? contextClass?.[ASENA_CONTEXT_CONTRACT];
+    const validateContract = contract ? prepareContextValidation(contract) : undefined;
+    const contractValidator: MiddlewareHandler[] = validateContract
+      ? [
+          async (context, next) => {
+            await validateContract(this.getRequestWrapper(context));
+            await next();
+          },
+        ]
+      : [];
 
     // Global middlewares are registered at top level via registerGlobalMiddlewaresTopLevel()
-    const allMiddlewares = [...preparedMiddlewares, ...validators];
+    const allMiddlewares = [...routeWrapper, ...preparedMiddlewares, ...validators, ...contractValidator];
 
     const methodHandler =
       this.methodMap[route.method] ??
