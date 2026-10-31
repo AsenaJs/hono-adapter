@@ -145,6 +145,12 @@ describe('query reads', () => {
     ['/q?a+b=1&a%20b=2', ['a b', 'a+b', 'a%20b']],
     ['/q?k=v&k=w', ['k']],
     ['/q?=v&k', ['', 'k']],
+    ['/q?na%6De=enc&name=plain', ['name', 'na%6De']],
+    ['/q?n%61me&name=plain', ['name']],
+    ['/q?x=1&na+me=a&name=plain', ['name', 'na me', 'x']],
+    ['/q?b=x%20y&name=plain', ['name', 'b']],
+    ['/q?names=1&n%61mes=2&name=plain', ['name', 'names']],
+    ['/q?name=plain&na%6De=enc', ['name']],
   ];
 
   for (const [url, keys] of queryCases) {
