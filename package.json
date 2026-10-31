@@ -13,7 +13,7 @@
   "author": "LibirSoft",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AsenaJs/hono-adapter.git"
+    "url": "git+https://github.com/AsenaJs/hono-adapter.git"
   },
   "license": "MIT",
   "engines": {
