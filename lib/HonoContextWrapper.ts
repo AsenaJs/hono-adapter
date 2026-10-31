@@ -33,6 +33,8 @@ const APPLICATION_JSON = 'application/json';
 
 const hasEncoding = (value: string): boolean => value.includes('%') || value.includes('+');
 
+const ENCODED_KEY = /(?:^|&)[^=&]*[%+]/;
+
 const findQueryParam = (url: string, key: string): string | undefined => {
   if (!key || hasEncoding(key)) {
     return getQueryParam(url, key) as string | undefined;
@@ -48,8 +50,16 @@ const findQueryParam = (url: string, key: string): string | undefined => {
   let index = url.indexOf(key, start + 1);
 
   while (index !== -1) {
-    if (index === start + 1 || url.charCodeAt(index - 1) === 38) {
-      const next = url.charCodeAt(index + length);
+    const next = url.charCodeAt(index + length);
+
+    if (
+      (index === start + 1 || url.charCodeAt(index - 1) === 38) &&
+      (next === 61 || next === 38 || Number.isNaN(next))
+    ) {
+      // ENCODED_KEY mirrors Hono's _getQueryParam check: an earlier encoded key may decode to this one.
+      if (index > start + 1 && hasEncoding(url) && ENCODED_KEY.test(url.slice(start + 1, index - 1))) {
+        return getQueryParam(url, key) as string | undefined;
+      }
 
       if (next === 61) {
         const valueStart = index + length + 1;
@@ -59,9 +69,7 @@ const findQueryParam = (url: string, key: string): string | undefined => {
         return hasEncoding(value) ? (getQueryParam(url, key) as string | undefined) : value;
       }
 
-      if (next === 38 || Number.isNaN(next)) {
-        return '';
-      }
+      return '';
     }
 
     index = url.indexOf(key, index + 1);
