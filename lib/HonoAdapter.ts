@@ -46,7 +46,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   public app: Hono;
 
-  private readonly _strict: boolean = true;
+  private readonly _strict: boolean = false;
 
   private readonly logErrors: boolean = true;
 
@@ -191,7 +191,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     const isOptionsObject = typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions;
 
-    this._strict = isOptionsObject ? (loggerOrOptions.strict ?? true) : true;
+    this._strict = isOptionsObject ? (loggerOrOptions.strict ?? false) : false;
     this.logErrors = isOptionsObject ? (loggerOrOptions.logErrors ?? true) : true;
 
     if (honoApp) {
