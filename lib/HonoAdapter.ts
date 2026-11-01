@@ -2,6 +2,7 @@ import { type Context, type Handler, Hono, type MiddlewareHandler, type Next, ty
 import { HTTPException } from 'hono/http-exception';
 import type { Server } from 'bun';
 import * as bun from 'bun';
+import { join, resolve, sep } from 'node:path';
 import { HonoContextWrapper, routeEndpointHandlers } from './HonoContextWrapper';
 import type { BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
@@ -13,6 +14,7 @@ import {
   assertContextAdapter,
   assertRouteContract,
   ASENA_CONTEXT_CONTRACT,
+  HttpException,
   isHttpException,
   prepareContextValidation,
   type RouteParams,
@@ -693,6 +695,43 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
+   * Decodes a static request path once before Hono's `serveStatic`, which turns any escape it
+   * cannot handle into a 404: a malformed escape becomes a 400, a decoded path outside the
+   * root a 403. Every other request reaches `serveStatic` untouched.
+   */
+  private prepareStaticPathGuard(staticServe: BaseStaticServeParams): MiddlewareHandler {
+    const root = resolve(staticServe.root);
+    const rootPrefix = root.endsWith(sep) ? root : root + sep;
+
+    return async (context, next) => {
+      const requestPath = context.req.path;
+
+      if (!requestPath.includes('%')) return next();
+
+      let decoded: string;
+
+      try {
+        decoded = decodeURIComponent(requestPath);
+      } catch {
+        throw new HttpException(400, { error: 'Bad Request' });
+      }
+
+      if (/(?:^|\/)\.\.(?:\/|$)/.test(decoded)) {
+        const rewritten = staticServe.rewriteRequestPath ? staticServe.rewriteRequestPath(decoded) : decoded;
+        const resolved = resolve(join(root, rewritten));
+
+        if (resolved !== root && !resolved.startsWith(rootPrefix)) {
+          this.logger.warn(`Path traversal attempt detected: ${decoded} -> ${resolved}`);
+
+          return context.text('Forbidden', 403);
+        }
+      }
+
+      return next();
+    };
+  }
+
+  /**
    * Prepares validation middleware with enhanced error handling
    * @param baseValidator - The validator to prepare
    * @returns Array of Hono middleware handlers for validation
@@ -1012,16 +1051,22 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     routeEndpointHandlers.add(endpoint);
 
-    if (route.staticServe?.onNotFound?.override) {
-      const handler = this.prepareHandler(route.handler);
-
-      routeEndpointHandlers.add(handler);
-      methodHandler(normalizedPath, ...allMiddlewares, endpoint, handler);
+    if (!route.staticServe) {
+      methodHandler(normalizedPath, ...allMiddlewares, endpoint);
 
       return;
     }
 
-    methodHandler(normalizedPath, ...allMiddlewares, endpoint);
+    const staticHandlers: Handler[] = [this.prepareStaticPathGuard(route.staticServe), endpoint];
+
+    if (route.staticServe.onNotFound?.override) {
+      const handler = this.prepareHandler(route.handler);
+
+      routeEndpointHandlers.add(handler);
+      staticHandlers.push(handler);
+    }
+
+    methodHandler(normalizedPath, ...allMiddlewares, ...staticHandlers);
   }
 
   /**
