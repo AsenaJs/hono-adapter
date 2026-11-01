@@ -565,9 +565,8 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   }
 
   private wrapSSEStreamingApi(honoStream: SSEStreamingApi): AsenaSSEStreamWriter {
-    return {
-      ...this.wrapStreamingApi(honoStream),
-      writeSSE: async (message) => {
+    return Object.assign(this.wrapStreamingApi(honoStream), {
+      writeSSE: async (message: Parameters<AsenaSSEStreamWriter['writeSSE']>[0]) => {
         if (message.data === undefined && message.comment === undefined) {
           throw new Error('writeSSE: message needs data or comment');
         }
@@ -591,7 +590,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
           });
         }
       },
-    };
+    });
   }
 
   public get context(): Context {
