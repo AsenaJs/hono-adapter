@@ -310,7 +310,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
 
   public getQueryAll(query: string): Promise<string[]> {
     try {
-      return Promise.resolve(this._context.req.queries(query));
+      return Promise.resolve(this._context.req.queries(query) ?? []);
     } catch (error) {
       return Promise.reject(error as Error);
     }
@@ -384,7 +384,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   }
 
   public async getCookie(name: string, secret?: string | BufferSource): Promise<string | false> {
-    return secret ? await getSignedCookie(this._context, secret, name) : getCookie(this._context, name);
+    return (secret ? await getSignedCookie(this._context, secret, name) : getCookie(this._context, name)) ?? false;
   }
 
   public async setCookie(name: string, value: string, options?: CookieExtra<CookieOptions>) {
