@@ -291,7 +291,9 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
    *
    * Routes without a validator are unaffected - `valid('json')` is undefined and we fall through.
    *
-   * @throws HttpException - 400 Bad Request when the raw body is not valid JSON
+   * An empty or whitespace-only raw body resolves `{}`, whatever the content type.
+   *
+   * @throws HttpException - 400 Bad Request when a non-empty raw body is not valid JSON
    */
   public getBody<T = keyof I extends never ? any : InputOutput<I, 'body'>>(): Promise<T> {
     try {
@@ -306,9 +308,18 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
         return Promise.resolve(validated);
       }
 
-      return req.json<T>().catch((error: unknown) => {
-        throw invalidJsonBody(error);
-      });
+      return req.text().then(
+        (text) => {
+          try {
+            return (text.trim() === '' ? {} : JSON.parse(text)) as T;
+          } catch (error) {
+            throw invalidJsonBody(error);
+          }
+        },
+        (error: unknown) => {
+          throw invalidJsonBody(error);
+        },
+      );
     } catch (error) {
       return Promise.reject(error as Error);
     }
