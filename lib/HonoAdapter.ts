@@ -41,6 +41,39 @@ import { HonoWebsocketAdapter } from './HonoWebsocketAdapter';
 import type { WebSocketData } from '@asenajs/asena/web-socket';
 import { serveStatic } from './utils/serveStatic';
 
+// RFC 6265 5.1.4
+const defaultCookiePath = (requestPath: string): string => {
+  const lastSlash = requestPath.lastIndexOf('/');
+
+  return lastSlash <= 0 ? '/' : requestPath.slice(0, lastSlash);
+};
+
+// RFC 6265 5.3 step 11: a browser replaces a stored cookie with the same name, domain and path.
+// A host-only cookie (no Domain) and one with an explicit Domain are different cookies, so '' stays distinct.
+const cookieIdentity = (setCookie: string, requestPath: string): string => {
+  const [pair, ...attributes] = setCookie.split(';');
+  let domain = '';
+  let path = '';
+
+  for (const attribute of attributes) {
+    const separator = attribute.indexOf('=');
+    const key = attribute
+      .slice(0, separator === -1 ? undefined : separator)
+      .trim()
+      .toLowerCase();
+    const value = separator === -1 ? '' : attribute.slice(separator + 1).trim();
+
+    if (key === 'domain') domain = value.replace(/^\./, '').toLowerCase();
+    else if (key === 'path') path = value;
+  }
+
+  if (!path.startsWith('/')) path = defaultCookiePath(requestPath);
+
+  const separator = pair.indexOf('=');
+
+  return `${(separator === -1 ? '' : pair.slice(0, separator)).trim()}\u0000${domain}\u0000${path}`;
+};
+
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
 
@@ -315,7 +348,9 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // built-in handler dumps a bare stack to stderr with no path, method or status, `logErrors:
     // false` could not suppress it, and a 4xx produced no output at all.
     if (!this.hasErrorHandler) {
-      this.app.onError((error, context) => this.defaultErrorResponse(error, context.req.path, context.req.method));
+      this.app.onError((error, context) =>
+        this.withRequestCookies(this.defaultErrorResponse(error, context.req.path, context.req.method), context),
+      );
     }
 
     this.websocketAdapter.prepareWebSocket(this.options?.wsOptions);
@@ -473,7 +508,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           // The application answered. Its handler is where this error gets recorded, with
           // whatever correlation id the application carries - a second line from the adapter
           // would only duplicate it.
-          return customResponse;
+          return this.withRequestCookies(customResponse, context);
         }
       } catch (handlerError) {
         // The `await` above is what brings a rejecting handler here rather than letting it escape
@@ -481,8 +516,32 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         this.logger.error('Error handler threw an error, using the default response:', handlerError);
       }
 
-      return this.defaultErrorResponse(error, context.req.path, context.req.method);
+      return this.withRequestCookies(this.defaultErrorResponse(error, context.req.path, context.req.method), context);
     });
+  }
+
+  /**
+   * Carries the request's `Set-Cookie` headers onto an error response, as Bun's CookieMap does for
+   * ergenecore. Only cookies: other headers staged with `c.header()` belonged to the unsent response.
+   */
+  private withRequestCookies(response: Response, context: Context): Response {
+    // `newResponse`, not `context.res`: reading `res` materialises it, and Hono then merges every
+    // staged header onto the error response.
+    const cookies = context.newResponse(null, 200).headers.getSetCookie();
+
+    if (cookies.length === 0) return response;
+
+    // The error response's own cookie wins: an onError that deletes the session must not be undone
+    // by the renewal a middleware staged earlier.
+    const requestPath = context.req.path;
+    const present = new Set(response.headers.getSetCookie().map((cookie) => cookieIdentity(cookie, requestPath)));
+    const merged = new Response(response.body, response);
+
+    for (const cookie of cookies) {
+      if (!present.has(cookieIdentity(cookie, requestPath))) merged.headers.append('Set-Cookie', cookie);
+    }
+
+    return merged;
   }
 
   /**
