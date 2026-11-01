@@ -1011,6 +1011,16 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       : this.prepareHandler(route.handler);
 
     routeEndpointHandlers.add(endpoint);
+
+    if (route.staticServe?.onNotFound?.override) {
+      const handler = this.prepareHandler(route.handler);
+
+      routeEndpointHandlers.add(handler);
+      methodHandler(normalizedPath, ...allMiddlewares, endpoint, handler);
+
+      return;
+    }
+
     methodHandler(normalizedPath, ...allMiddlewares, endpoint);
   }
 
