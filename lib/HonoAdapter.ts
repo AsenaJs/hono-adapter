@@ -1,8 +1,9 @@
-import { type Context, type Handler, Hono, type MiddlewareHandler, type ValidationTargets } from 'hono';
+import { type Context, type Handler, Hono, type MiddlewareHandler, type Next, type ValidationTargets } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Server } from 'bun';
 import * as bun from 'bun';
-import { HonoContextWrapper } from './HonoContextWrapper';
+import { join, resolve, sep } from 'node:path';
+import { HonoContextWrapper, routeEndpointHandlers } from './HonoContextWrapper';
 import type { BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
   AsenaAdapter,
@@ -13,6 +14,7 @@ import {
   assertContextAdapter,
   assertRouteContract,
   ASENA_CONTEXT_CONTRACT,
+  HttpException,
   isHttpException,
   prepareContextValidation,
   type RouteParams,
@@ -79,7 +81,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   public app: Hono;
 
-  private readonly _strict: boolean = true;
+  private readonly _strict: boolean = false;
 
   private readonly logErrors: boolean = true;
 
@@ -224,7 +226,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     const isOptionsObject = typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions;
 
-    this._strict = isOptionsObject ? (loggerOrOptions.strict ?? true) : true;
+    this._strict = isOptionsObject ? (loggerOrOptions.strict ?? false) : false;
     this.logErrors = isOptionsObject ? (loggerOrOptions.logErrors ?? true) : true;
 
     if (honoApp) {
@@ -396,7 +398,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     this.server = bun.serve(serveConfig);
 
-    this.websocketAdapter.startWebsocket(this.server);
+    await this.websocketAdapter.startWebsocket(this.server);
 
     // Log controller-based route information
     if (this.routeQueue.length > 0 || this.wsRouteQueue.length > 0 || this.frontEndRouteQueue.length > 0) {
@@ -752,6 +754,56 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
+   * Hono's `serveStatic` turns any escape left in the path into a 404, so a path that still
+   * carries one is decoded here once: a malformed escape becomes a 400, a decoded path outside
+   * the root a 403, and an in-root one is served by its decoded name. Every other request
+   * reaches `serveStatic` untouched.
+   *
+   * The static route owns its request: a miss answers the application's not-found response
+   * instead of falling through to a later endpoint, unless an `@Override` onNotFound hook hands it
+   * to the route handler.
+   */
+  private prepareStaticEndpoint(staticServe: BaseStaticServeParams): MiddlewareHandler {
+    const options = this.prepareStaticServeOptions(staticServe);
+    const serve = serveStatic(options);
+    const root = resolve(staticServe.root);
+    const rootPrefix = root.endsWith(sep) ? root : root + sep;
+    const continuesToHandler = staticServe.onNotFound?.override === true;
+    const ownMiss = async (run: MiddlewareHandler, context: Context, next: Next) => {
+      const response = await run(context, continuesToHandler ? next : () => Promise.resolve());
+
+      if (response || context.finalized) return response;
+
+      return context.notFound();
+    };
+
+    return async (context, next) => {
+      const requestPath = context.req.path;
+
+      if (!requestPath.includes('%')) return ownMiss(serve, context, next);
+
+      let decoded: string;
+
+      try {
+        decoded = decodeURIComponent(requestPath);
+      } catch {
+        throw new HttpException(400, { error: 'Bad Request' });
+      }
+
+      const rewritten = staticServe.rewriteRequestPath ? staticServe.rewriteRequestPath(decoded) : decoded;
+      const resolved = resolve(join(root, rewritten));
+
+      if (resolved !== root && !resolved.startsWith(rootPrefix)) {
+        this.logger.warn(`Path traversal attempt detected: ${decoded} -> ${resolved}`);
+
+        return context.text('Forbidden', 403);
+      }
+
+      return ownMiss(serveStatic({ ...options, path: rewritten }), context, next);
+    };
+  }
+
+  /**
    * Prepares validation middleware with enhanced error handling
    * @param baseValidator - The validator to prepare
    * @returns Array of Hono middleware handlers for validation
@@ -886,7 +938,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         }
       } else {
         // Exclude patterns exist → runtime filtering required
-        this.app.use('*', async (c, next) => {
+        const filtered: MiddlewareHandler = async (c, next) => {
           if (shouldApplyMiddleware(new URL(c.req.url).pathname, config)) {
             for (const mw of parsed) {
               let called = false;
@@ -900,7 +952,9 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           }
 
           await next();
-        });
+        };
+
+        this.app.use('*', filtered);
       }
     }
   }
@@ -993,7 +1047,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     const normalizedWsPath = this.normalizePath(`/${wsRoute.path}`);
 
-    (this.app as any).get(normalizedWsPath, ...preparedMiddlewares, async (c: Context, next) => {
+    const upgrade = async (c: Context, next: Next) => {
       const websocketData = c.get('_websocketData') || {};
 
       const id = bun.randomUUIDv7();
@@ -1007,7 +1061,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       }
 
       await next(); // Failed
-    });
+    };
+
+    routeEndpointHandlers.add(upgrade);
+    (this.app as any).get(normalizedWsPath, ...preparedMiddlewares, upgrade);
   }
 
   /**
@@ -1060,13 +1117,28 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // so registered paths must also not have trailing slash to match.
     const normalizedPath = this.normalizePath(route.path);
 
-    if (route.staticServe) {
-      methodHandler(normalizedPath, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(route.staticServe)));
-    } else {
+    const endpoint = route.staticServe
+      ? this.prepareStaticEndpoint(route.staticServe)
+      : this.prepareHandler(route.handler);
+
+    routeEndpointHandlers.add(endpoint);
+
+    if (!route.staticServe) {
+      methodHandler(normalizedPath, ...allMiddlewares, endpoint);
+
+      return;
+    }
+
+    const staticHandlers: Handler[] = [endpoint];
+
+    if (route.staticServe.onNotFound?.override) {
       const handler = this.prepareHandler(route.handler);
 
-      methodHandler(normalizedPath, ...allMiddlewares, handler);
+      routeEndpointHandlers.add(handler);
+      staticHandlers.push(handler);
     }
+
+    methodHandler(normalizedPath, ...allMiddlewares, ...staticHandlers);
   }
 
   /**

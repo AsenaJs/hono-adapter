@@ -22,9 +22,10 @@ export interface HonoAdapterOptions {
 
   /**
    * Hono strict mode for route matching.
-   * When false, `/health` and `/health/` match the same route.
-   * Default: true (Hono default)
+   * When false, `/health` and `/health/` match the same route, as on every Asena adapter.
+   * Set to `true` to answer 404 for the trailing-slash form. Ignored when `app` is passed.
    *
+   * @default false
    * @see https://hono.dev/docs/api/hono#strict-mode
    */
   strict?: boolean;

@@ -102,21 +102,11 @@ describe('static file 404 goes through the application onNotFound', () => {
     expect(await response.text()).toBe('here');
   });
 
-  test('override on the per-route hook means something different here than on ergenecore', async () => {
+  test('override on the per-route hook continues to the route handler, as on ergenecore', async () => {
     const baseUrl = await boot({ withHook: true, fileHookOverride: true });
     const response = await fetch(`${baseUrl}/assets/nope.txt`);
 
-    // KNOWN DIVERGENCE, pre-existing and pinned deliberately rather than papered over.
-    //
-    // On ergenecore `override: true` means "I answered it, continue to the route handler", and
-    // that test asserts a 200 from the handler. Here it only selects whether the hook receives
-    // the raw Hono context instead of a wrapped one: `serveStatic` is registered *instead of*
-    // the route handler (there is nothing to fall through to), and it always calls next(),
-    // which lands in app.notFound.
-    //
-    // Two different features sharing one name. Worth reconciling, but changing Hono's routing
-    // is a bigger decision than the 404-envelope fix this suite exists for.
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ shaped: true, path: '/assets/nope.txt' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ fellThrough: true });
   });
 });

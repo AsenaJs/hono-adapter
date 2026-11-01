@@ -1,4 +1,5 @@
 import {
+  HttpException,
   ValidatedInput,
   readContractBody,
   readContractForm,
@@ -27,9 +28,18 @@ import { bufferToFormData } from 'hono/utils/buffer';
 
 const VALIDATED_INPUT_KEY = '_asenaValidatedInput';
 
+/** @internal Endpoint handlers the adapter registers for routes; middleware never lands here. */
+export const routeEndpointHandlers = new WeakSet<object>();
+
 const TEXT_PLAIN = 'text/plain; charset=UTF-8';
 
 const APPLICATION_JSON = 'application/json';
+
+const invalidJsonBody = (error: unknown): HttpException =>
+  new HttpException(400, {
+    error: 'Invalid JSON in request body',
+    message: error instanceof Error ? error.message : 'Failed to parse JSON',
+  });
 
 const hasEncoding = (value: string): boolean => value.includes('%') || value.includes('+');
 
@@ -175,7 +185,16 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
 
   public get routePattern(): string | undefined {
     try {
-      return this._context.req.routePath;
+      const req = this._context.req;
+      const routes = req.matchedRoutes;
+
+      for (let index = req.routeIndex; index < routes.length; index++) {
+        if (routeEndpointHandlers.has(routes[index].handler)) {
+          return routes[index].path;
+        }
+      }
+
+      return undefined;
     } catch {
       return undefined;
     }
@@ -271,6 +290,10 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
    * `req.valid('json')`; nothing on this context read it.
    *
    * Routes without a validator are unaffected - `valid('json')` is undefined and we fall through.
+   *
+   * An empty or whitespace-only raw body resolves `{}`, whatever the content type.
+   *
+   * @throws HttpException - 400 Bad Request when a non-empty raw body is not valid JSON
    */
   public getBody<T = keyof I extends never ? any : InputOutput<I, 'body'>>(): Promise<T> {
     try {
@@ -285,7 +308,18 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
         return Promise.resolve(validated);
       }
 
-      return req.json<T>();
+      return req.text().then(
+        (text) => {
+          try {
+            return (text.trim() === '' ? {} : JSON.parse(text)) as T;
+          } catch (error) {
+            throw invalidJsonBody(error);
+          }
+        },
+        (error: unknown) => {
+          throw invalidJsonBody(error);
+        },
+      );
     } catch (error) {
       return Promise.reject(error as Error);
     }
@@ -301,7 +335,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
 
   public getQueryAll(query: string): Promise<string[]> {
     try {
-      return Promise.resolve(this._context.req.queries(query));
+      return Promise.resolve(this._context.req.queries(query) ?? []);
     } catch (error) {
       return Promise.reject(error as Error);
     }
@@ -375,7 +409,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   }
 
   public async getCookie(name: string, secret?: string | BufferSource): Promise<string | false> {
-    return secret ? await getSignedCookie(this._context, secret, name) : getCookie(this._context, name);
+    return (secret ? await getSignedCookie(this._context, secret, name) : getCookie(this._context, name)) ?? false;
   }
 
   public async setCookie(name: string, value: string, options?: CookieExtra<CookieOptions>) {
@@ -488,17 +522,20 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
     cb: (stream: AsenaSSEStreamWriter) => Promise<void>,
     onError?: (error: Error, stream: AsenaSSEStreamWriter) => Promise<void>,
   ): Response {
-    return honoStreamSSE(
-      this._context,
-      async (honoStream) => {
-        await cb(this.wrapSSEStreamingApi(honoStream));
-      },
-      onError
-        ? async (e, honoStream) => {
-            await onError(e, this.wrapSSEStreamingApi(honoStream));
-          }
-        : undefined,
-    );
+    // Hono's helper writes its own `event: error` frame after onError, so the callback runs here instead.
+    return honoStreamSSE(this._context, async (honoStream) => {
+      const writer = this.wrapSSEStreamingApi(honoStream);
+
+      try {
+        await cb(writer);
+      } catch (error) {
+        if (!onError || !(error instanceof Error)) {
+          throw error;
+        }
+
+        await onError(error, writer);
+      }
+    });
   }
 
   public streamText(
@@ -542,9 +579,8 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   }
 
   private wrapSSEStreamingApi(honoStream: SSEStreamingApi): AsenaSSEStreamWriter {
-    return {
-      ...this.wrapStreamingApi(honoStream),
-      writeSSE: async (message) => {
+    return Object.assign(this.wrapStreamingApi(honoStream), {
+      writeSSE: async (message: Parameters<AsenaSSEStreamWriter['writeSSE']>[0]) => {
         if (message.data === undefined && message.comment === undefined) {
           throw new Error('writeSSE: message needs data or comment');
         }
@@ -568,7 +604,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
           });
         }
       },
-    };
+    });
   }
 
   public get context(): Context {

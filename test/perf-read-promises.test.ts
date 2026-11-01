@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { HttpException } from '@asenajs/asena/adapter';
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -75,7 +76,8 @@ describe('context read methods return promises', () => {
     const { returned, settled } = await capture('/x', jsonPost('{nope'), (w) => w.getBody());
 
     expect(returned).toBeInstanceOf(Promise);
-    expect(settled.error).toBeInstanceOf(SyntaxError);
+    expect(settled.error).toBeInstanceOf(HttpException);
+    expect((settled.error as HttpException).status).toBe(400);
   });
 
   it('getBody and getParseBody resolve validated data, including null', async () => {

@@ -6,9 +6,13 @@ import { serveStatic as baseServeStatic, type ServeStaticOptions } from 'hono/se
 type ContentGetter = Parameters<typeof baseServeStatic>[0]['getContent'];
 
 const getContent = (async (path: string) => {
-  const file = Bun.file(path);
+  try {
+    const file = Bun.file(path);
 
-  return (await file.exists()) ? file : null;
+    return (await file.exists()) ? file : null;
+  } catch {
+    return null;
+  }
 }) as unknown as ContentGetter;
 
 const isDir = (path: string): boolean | undefined => {
