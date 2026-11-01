@@ -103,6 +103,22 @@ describe('an error response keeps the cookies set earlier in the request', () =>
       validator: null,
     } as any);
 
+    adapter.registerRoute({
+      method: HttpMethod.GET,
+      path: '/a/b/forbidden',
+      middlewares: [
+        middleware(async (context) => {
+          await context.setCookie('session', 'renewed', { extraOptions: { path: '/a/b' } });
+          await context.setCookie('root', 'renewed', { extraOptions: { path: '/' } });
+        }),
+      ],
+      handler: () => {
+        throw new HttpException(403, { error: 'Forbidden' });
+      },
+      staticServe: null,
+      validator: null,
+    } as any);
+
     configure?.(adapter);
 
     server = (await adapter.start()) as any;
@@ -205,6 +221,73 @@ describe('an error response keeps the cookies set earlier in the request', () =>
       'session=; Domain=example.com; Path=/; Max-Age=0',
       ...EXPECTED_COOKIES,
     ]);
+  });
+
+  test("a deletion without Path matches the request cookie on the request's default-path", async () => {
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(
+        () =>
+          new Response('revoked', {
+            status: 401,
+            headers: { 'Set-Cookie': 'session=; Max-Age=0' },
+          }),
+      ),
+    );
+    const response = await fetch(`${baseUrl}/forbidden`);
+
+    expect(response.status).toBe(401);
+    expect(response.headers.getSetCookie()).toEqual(['session=; Max-Age=0', 'csrf=rotated; Path=/']);
+  });
+
+  test('a Path that does not start with a slash falls back to the default-path', async () => {
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(
+        () =>
+          new Response('revoked', {
+            status: 401,
+            headers: { 'Set-Cookie': 'session=; Path=relative; Max-Age=0' },
+          }),
+      ),
+    );
+    const response = await fetch(`${baseUrl}/forbidden`);
+
+    expect(response.headers.getSetCookie()).toEqual(['session=; Path=relative; Max-Age=0', 'csrf=rotated; Path=/']);
+  });
+
+  test('on a nested request path the default-path is the directory, not the root', async () => {
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(() => {
+        const headers = new Headers();
+
+        headers.append('Set-Cookie', 'session=; Max-Age=0');
+        headers.append('Set-Cookie', 'root=; Max-Age=0');
+
+        return new Response('revoked', { status: 401, headers });
+      }),
+    );
+    const response = await fetch(`${baseUrl}/a/b/forbidden`);
+
+    // Default-path of /a/b/forbidden is /a/b: it replaces `session` (Path=/a/b) but not `root` (Path=/).
+    expect(response.headers.getSetCookie()).toEqual([
+      'session=; Max-Age=0',
+      'root=; Max-Age=0',
+      'root=renewed; Path=/',
+    ]);
+  });
+
+  test('a host-only cookie and one with an explicit Domain stay distinct', async () => {
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(
+        () =>
+          new Response('revoked', {
+            status: 401,
+            headers: { 'Set-Cookie': 'session=; Domain=localhost; Max-Age=0' },
+          }),
+      ),
+    );
+    const response = await fetch(`${baseUrl}/forbidden`);
+
+    expect(response.headers.getSetCookie()).toEqual(['session=; Domain=localhost; Max-Age=0', ...EXPECTED_COOKIES]);
   });
 
   test('an onError that answers through context.send does not duplicate the cookies', async () => {
