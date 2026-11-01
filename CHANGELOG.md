@@ -1,5 +1,76 @@
 # @asenajs/hono-adapter
 
+## 5.1.0
+
+### Minor Changes
+
+- eea56d2: A static route now owns its request. When the requested file does not exist, the request ends at the static route: the
+  static `onNotFound` hook runs (if any), then the application's `onNotFound` answers, or the default 404
+  `{"error":"Not Found"}` when there is none - as on ergenecore. Before, Hono's `serveStatic` passed the miss on with
+  `next()`, so another matching endpoint (for example a `@Get('/*')` catch-all) answered it. A request that is not under the
+  static route still reaches that endpoint, and an existing file is served as before.
+
+  Breaking for an application that relied on that fall-through: a missing file under a static route no longer reaches a
+  later `/*` handler. Migrate by marking the static serve's `onNotFound` with `@Override()`: the miss then continues to the
+  static route's own controller method, which can answer it (for an SPA, return `index.html`), or use `rewriteRequestPath`
+  as in the documented SPA example. This is a minor rather than a major because the documented static-serve contract already
+  says a non-override miss answers 404; the fall-through was an undocumented Hono-only difference.
+
+- 529279d: API routes now answer the trailing-slash form of their path: with the default options `GET /users/` reaches the
+  `GET /users` route instead of returning 404, matching ergenecore. The `strict` option now defaults to `false`.
+
+  Behaviour change: an application that relied on `/x/` answering 404 gets the route's response instead. Pass
+  `strict: true` to `createHonoAdapter` / `new HonoAdapter` to keep the previous behaviour. An application that passes
+  its own Hono `app` keeps that app's `strict` setting. HTML routes and the root route `/` are unaffected.
+
+### Patch Changes
+
+- bab6b2f: `context.getQueryAll(name)` now resolves `[]` for a query key that is not in the URL, and `context.getCookie(name)`
+  resolves `false` for a missing cookie, signed or not - the types core declares (`string[]` and `string | false`).
+  Both resolved `undefined` before. A signed cookie with a bad signature still resolves `false`.
+- f64b565: `context.getBody()` resolves `{}` for an empty or whitespace-only request body (no body, `Content-Length: 0`, any or no
+  `Content-Type`, any method) instead of rejecting with `HttpException(400)`, matching ergenecore. A non-empty body that is
+  not valid JSON still rejects with `HttpException(400)`.
+- 6181278: `context.getBody()` now rejects with core `HttpException(400)` (`{ error: 'Invalid JSON in request body', message }`)
+  when the request body is not valid JSON. Previously the raw `SyntaxError` reached `onError` and, without one, the client
+  got a 500 for its own malformed request. An `onError` that matched `SyntaxError` now receives the `HttpException`
+  instead; `isHttpException(error)` and `error.status === 400` identify it, the same as on ergenecore.
+- a8f8863: The `streamSSE` error callback now owns the stream output: when the handler throws, the client receives only what the
+  callback writes. Previously Hono's helper appended its own `event: error` / `data: <message>` frame after the callback,
+  so a client saw one frame more than the application wrote - including the error message the application may have
+  chosen not to expose. Without an error callback nothing changes: the error is logged by Hono and the stream closes.
+- eaabdfd: The `streamSSE` writer now reports `stream.aborted` and `stream.closed` live. Both were read once when the writer was
+  built, so they stayed `false` for the whole stream: a long-lived SSE loop that checked `stream.aborted` kept running
+  after the client disconnected, even though `onAbort` had fired. The `stream` and `streamText` writers already reported
+  live state and are unchanged.
+- 3723310: A static route now decodes an escaped request path once before serving it. A malformed escape (`%zz`, a lone `%`, a
+  truncated UTF-8 sequence) rejects with core `HttpException(400)` (`{ error: 'Bad Request' }`) through the normal error
+  path, and a decoded path that leaves the static root (`..%2f...`) answers `403 Forbidden` with a warning log, the same
+  as on ergenecore. Previously both answered 404. Plain `../`, double-encoded and backslash spellings still answer 404,
+  and no file outside the root is served.
+- b1d87e5: A static route now serves an in-root file whose request path carries an escape Hono's `serveStatic` refuses, such as an
+  encoded slash (`/static/sub%2Ffile.txt` serves `sub/file.txt`) or an encoded percent sign (`/static/100%25.txt` serves
+  `100%.txt`), instead of answering 404, matching ergenecore. The path is decoded once and `rewriteRequestPath` runs once on
+  the decoded path; `onFound` / `onNotFound` receive the joined file path. A malformed escape still answers 400 and a decoded
+  path outside the root still answers 403.
+- 68f2c87: `context.routePattern` now reports the endpoint that is handling the request: the first route endpoint at or after the
+  handler Hono is running, instead of the first one Hono matched. On a static miss the static route answers, so the
+  application's `onNotFound` and any middleware read the static route's pattern (e.g. `/assets/:file`), as on ergenecore.
+- 9470094: A static route answers not-found for a request path whose decoded form carries a NUL byte (`/static/a%00.txt`) instead of
+  answering 500 and logging an application error, matching ergenecore.
+- ce62c94: A static route whose `onNotFound` hook is marked `@Override` now continues to the route's controller method when the
+  file is missing: the hook runs once and the handler answers, the same as on ergenecore. Previously the request always
+  fell through to the application's 404. Without `@Override` a missing file still answers the 404 and the handler is
+  never called. The overriding hook still receives the raw Hono context, as before.
+- 34079d0: `context.routePattern` is now `undefined` when no route matched the request. Previously a global middleware read its own
+  catch-all pattern (`/*`, or an include pattern such as `/api/*`) on an unmatched path, so consumers like OTel route labels
+  grouped every unknown path under it. On a matched request a global middleware now reads the declared route pattern
+  (e.g. `/users/:id`) both before and after `next()`, instead of `/*` before it.
+- b100d89: `start()` now waits for the WebSocket transport's `init()` before it resolves. Previously it resolved while a remote
+  transport such as `RedisTransport` was still connecting, before every WebSocket service had its `server` assigned, and
+  a failing `init()` surfaced as an unhandled rejection. A failing `init()` now rejects `start()`, so the application
+  fails to boot instead of running without a working transport.
+
 ## 5.0.3
 
 ### Patch Changes
