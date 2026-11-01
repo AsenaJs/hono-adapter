@@ -508,17 +508,20 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
     cb: (stream: AsenaSSEStreamWriter) => Promise<void>,
     onError?: (error: Error, stream: AsenaSSEStreamWriter) => Promise<void>,
   ): Response {
-    return honoStreamSSE(
-      this._context,
-      async (honoStream) => {
-        await cb(this.wrapSSEStreamingApi(honoStream));
-      },
-      onError
-        ? async (e, honoStream) => {
-            await onError(e, this.wrapSSEStreamingApi(honoStream));
-          }
-        : undefined,
-    );
+    // Hono's helper writes its own `event: error` frame after onError, so the callback runs here instead.
+    return honoStreamSSE(this._context, async (honoStream) => {
+      const writer = this.wrapSSEStreamingApi(honoStream);
+
+      try {
+        await cb(writer);
+      } catch (error) {
+        if (!onError || !(error instanceof Error)) {
+          throw error;
+        }
+
+        await onError(error, writer);
+      }
+    });
   }
 
   public streamText(
