@@ -758,17 +758,29 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * carries one is decoded here once: a malformed escape becomes a 400, a decoded path outside
    * the root a 403, and an in-root one is served by its decoded name. Every other request
    * reaches `serveStatic` untouched.
+   *
+   * The static route owns its request: a miss answers the application's not-found response
+   * instead of falling through to a later endpoint, unless an `@Override` onNotFound hook hands it
+   * to the route handler.
    */
   private prepareStaticEndpoint(staticServe: BaseStaticServeParams): MiddlewareHandler {
     const options = this.prepareStaticServeOptions(staticServe);
     const serve = serveStatic(options);
     const root = resolve(staticServe.root);
     const rootPrefix = root.endsWith(sep) ? root : root + sep;
+    const continuesToHandler = staticServe.onNotFound?.override === true;
+    const ownMiss = async (run: MiddlewareHandler, context: Context, next: Next) => {
+      const response = await run(context, continuesToHandler ? next : () => Promise.resolve());
+
+      if (response || context.finalized) return response;
+
+      return context.notFound();
+    };
 
     return async (context, next) => {
       const requestPath = context.req.path;
 
-      if (!requestPath.includes('%')) return serve(context, next);
+      if (!requestPath.includes('%')) return ownMiss(serve, context, next);
 
       let decoded: string;
 
@@ -787,7 +799,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         return context.text('Forbidden', 403);
       }
 
-      return serveStatic({ ...options, path: rewritten })(context, next);
+      return ownMiss(serveStatic({ ...options, path: rewritten }), context, next);
     };
   }
 

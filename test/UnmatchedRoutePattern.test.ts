@@ -122,7 +122,7 @@ describe('routePattern on matched and unmatched requests', () => {
     expect(seen['/api/missing']).toEqual({ before: undefined, after: undefined });
   });
 
-  describe('after a static route falls through', () => {
+  describe('on a static route next to a /* endpoint', () => {
     const root = mkdtempSync(join(tmpdir(), 'asena-route-pattern-static-'));
 
     writeFileSync(join(root, 'app.css'), 'body{}');
@@ -158,14 +158,13 @@ describe('routePattern on matched and unmatched requests', () => {
       return { seen, baseUrl: started.baseUrl, handlerPatterns };
     }
 
-    it('reports the fallback endpoint that answers a missing asset', async () => {
+    it('keeps the static pattern on a missing asset, which the static route answers', async () => {
       const { seen, baseUrl, handlerPatterns } = await bootWithFallback();
       const res = await fetch(`${baseUrl}/assets/missing.css`);
 
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ handler: 'fallback' });
-      expect(handlerPatterns).toEqual(['/*']);
-      expect(seen['/assets/missing.css']).toEqual({ before: '/assets/:file', after: '/*' });
+      expect(res.status).toBe(404);
+      expect(handlerPatterns).toEqual([]);
+      expect(seen['/assets/missing.css']).toEqual({ before: '/assets/:file', after: '/assets/:file' });
     });
 
     it('keeps the static pattern when the asset is served', async () => {
