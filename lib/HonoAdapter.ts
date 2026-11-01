@@ -2,7 +2,7 @@ import { type Context, type Handler, Hono, type MiddlewareHandler, type Validati
 import { HTTPException } from 'hono/http-exception';
 import type { Server } from 'bun';
 import * as bun from 'bun';
-import { HonoContextWrapper } from './HonoContextWrapper';
+import { globalMiddlewareHandlers, HonoContextWrapper } from './HonoContextWrapper';
 import type { BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
   AsenaAdapter,
@@ -817,6 +817,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const { middleware, config } of this.globalMiddlewares) {
       const parsed = middlewareParser([middleware], () => this.server);
 
+      parsed.forEach((handler) => globalMiddlewareHandlers.add(handler));
+
       if (!config) {
         // No pattern filter → apply to all routes
         this.app.use('*', ...parsed);
@@ -827,7 +829,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         }
       } else {
         // Exclude patterns exist → runtime filtering required
-        this.app.use('*', async (c, next) => {
+        const filtered: MiddlewareHandler = async (c, next) => {
           if (shouldApplyMiddleware(new URL(c.req.url).pathname, config)) {
             for (const mw of parsed) {
               let called = false;
@@ -841,7 +843,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           }
 
           await next();
-        });
+        };
+
+        globalMiddlewareHandlers.add(filtered);
+        this.app.use('*', filtered);
       }
     }
   }
