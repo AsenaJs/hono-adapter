@@ -41,6 +41,29 @@ import { HonoWebsocketAdapter } from './HonoWebsocketAdapter';
 import type { WebSocketData } from '@asenajs/asena/web-socket';
 import { serveStatic } from './utils/serveStatic';
 
+// RFC 6265 5.3 step 11: a browser replaces a stored cookie with the same name, domain and path.
+const cookieIdentity = (setCookie: string): string => {
+  const [pair, ...attributes] = setCookie.split(';');
+  let domain = '';
+  let path = '';
+
+  for (const attribute of attributes) {
+    const separator = attribute.indexOf('=');
+    const key = attribute
+      .slice(0, separator === -1 ? undefined : separator)
+      .trim()
+      .toLowerCase();
+    const value = separator === -1 ? '' : attribute.slice(separator + 1).trim();
+
+    if (key === 'domain') domain = value.replace(/^\./, '').toLowerCase();
+    else if (key === 'path') path = value;
+  }
+
+  const separator = pair.indexOf('=');
+
+  return `${(separator === -1 ? '' : pair.slice(0, separator)).trim()}\u0000${domain}\u0000${path}`;
+};
+
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
 
@@ -498,11 +521,13 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     if (cookies.length === 0) return response;
 
-    const present = new Set(response.headers.getSetCookie());
+    // The error response's own cookie wins: an onError that deletes the session must not be undone
+    // by the renewal a middleware staged earlier.
+    const present = new Set(response.headers.getSetCookie().map(cookieIdentity));
     const merged = new Response(response.body, response);
 
     for (const cookie of cookies) {
-      if (!present.has(cookie)) merged.headers.append('Set-Cookie', cookie);
+      if (!present.has(cookieIdentity(cookie))) merged.headers.append('Set-Cookie', cookie);
     }
 
     return merged;

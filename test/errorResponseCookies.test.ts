@@ -171,6 +171,42 @@ describe('an error response keeps the cookies set earlier in the request', () =>
     expect(response.headers.getSetCookie()).toEqual(['own=1; Path=/', ...EXPECTED_COOKIES]);
   });
 
+  test("an onError response's own cookie wins over the request's cookie of the same identity", async () => {
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(
+        () =>
+          new Response('revoked', {
+            status: 401,
+            headers: { 'Set-Cookie': 'session=; Path=/; Max-Age=0' },
+          }),
+      ),
+    );
+    const response = await fetch(`${baseUrl}/forbidden`);
+
+    expect(response.status).toBe(401);
+    expect(response.headers.getSetCookie()).toEqual(['session=; Path=/; Max-Age=0', 'csrf=rotated; Path=/']);
+  });
+
+  test('a cookie with the same name but another Path or Domain is a different cookie and still carries over', async () => {
+    const baseUrl = await boot((adapter) =>
+      adapter.onError(() => {
+        const headers = new Headers();
+
+        headers.append('Set-Cookie', 'session=; Path=/admin; Max-Age=0');
+        headers.append('Set-Cookie', 'session=; Domain=example.com; Path=/; Max-Age=0');
+
+        return new Response('revoked', { status: 401, headers });
+      }),
+    );
+    const response = await fetch(`${baseUrl}/forbidden`);
+
+    expect(response.headers.getSetCookie()).toEqual([
+      'session=; Path=/admin; Max-Age=0',
+      'session=; Domain=example.com; Path=/; Max-Age=0',
+      ...EXPECTED_COOKIES,
+    ]);
+  });
+
   test('an onError that answers through context.send does not duplicate the cookies', async () => {
     const baseUrl = await boot((adapter) => adapter.onError((_error, context) => context.send({ mine: true }, 403)));
     const response = await fetch(`${baseUrl}/forbidden`);
