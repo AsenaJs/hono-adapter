@@ -68,6 +68,9 @@ describe('static path decoding', () => {
   fs.mkdirSync(path.join(base, 'public-private'));
   fs.mkdirSync(path.join(base, 'secret'));
   fs.writeFileSync(path.join(root, 'hello.txt'), 'hello');
+  fs.mkdirSync(path.join(root, 'sub'));
+  fs.writeFileSync(path.join(root, 'sub', 'file.txt'), 'sub-file');
+  fs.writeFileSync(path.join(root, '100%.txt'), 'percent');
   fs.writeFileSync(path.join(base, 'public-private', 'credentials.txt'), SIBLING_SECRET);
   fs.writeFileSync(path.join(base, 'secret', 'secret.txt'), OUTSIDE_SECRET);
 
@@ -174,5 +177,38 @@ describe('static path decoding', () => {
     }
 
     expect(probe.rewrites).toEqual(['/static/hello.txt', '/static/hello.txt']);
+  });
+
+  it('serves an in-root file whose request path carries a reserved escape, rewriting it once', async () => {
+    const { probe, port } = await boot();
+    const served = [
+      ['/static/sub%2Ffile.txt', 'sub-file'],
+      ['/static/sub%2ffile.txt', 'sub-file'],
+      ['/static/100%25.txt', 'percent'],
+      ['/static/sub%2F..%2Fhello.txt', 'hello'],
+    ];
+
+    for (const [target, body] of served) {
+      const response = await rawGet(port, target);
+
+      expect([target, response.status, response.body]).toEqual([target, 200, body]);
+    }
+
+    expect(probe.rewrites).toEqual([
+      '/static/sub/file.txt',
+      '/static/sub/file.txt',
+      '/static/100%.txt',
+      '/static/sub/../hello.txt',
+    ]);
+    expect(probe.found).toHaveLength(served.length);
+    expect(probe.handler).toBe(0);
+  });
+
+  it('keeps an in-root escaped path that names no file at 404', async () => {
+    const { probe, port } = await boot();
+    const response = await rawGet(port, '/static/sub%2Fmissing.txt');
+
+    expect(response.status).toBe(404);
+    expect(probe.handler).toBe(0);
   });
 });

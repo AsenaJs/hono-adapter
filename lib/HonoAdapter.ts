@@ -754,18 +754,21 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
-   * Decodes a static request path once before Hono's `serveStatic`, which turns any escape it
-   * cannot handle into a 404: a malformed escape becomes a 400, a decoded path outside the
-   * root a 403. Every other request reaches `serveStatic` untouched.
+   * Hono's `serveStatic` turns any escape left in the path into a 404, so a path that still
+   * carries one is decoded here once: a malformed escape becomes a 400, a decoded path outside
+   * the root a 403, and an in-root one is served by its decoded name. Every other request
+   * reaches `serveStatic` untouched.
    */
-  private prepareStaticPathGuard(staticServe: BaseStaticServeParams): MiddlewareHandler {
+  private prepareStaticEndpoint(staticServe: BaseStaticServeParams): MiddlewareHandler {
+    const options = this.prepareStaticServeOptions(staticServe);
+    const serve = serveStatic(options);
     const root = resolve(staticServe.root);
     const rootPrefix = root.endsWith(sep) ? root : root + sep;
 
     return async (context, next) => {
       const requestPath = context.req.path;
 
-      if (!requestPath.includes('%')) return next();
+      if (!requestPath.includes('%')) return serve(context, next);
 
       let decoded: string;
 
@@ -775,18 +778,16 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         throw new HttpException(400, { error: 'Bad Request' });
       }
 
-      if (/(?:^|\/)\.\.(?:\/|$)/.test(decoded)) {
-        const rewritten = staticServe.rewriteRequestPath ? staticServe.rewriteRequestPath(decoded) : decoded;
-        const resolved = resolve(join(root, rewritten));
+      const rewritten = staticServe.rewriteRequestPath ? staticServe.rewriteRequestPath(decoded) : decoded;
+      const resolved = resolve(join(root, rewritten));
 
-        if (resolved !== root && !resolved.startsWith(rootPrefix)) {
-          this.logger.warn(`Path traversal attempt detected: ${decoded} -> ${resolved}`);
+      if (resolved !== root && !resolved.startsWith(rootPrefix)) {
+        this.logger.warn(`Path traversal attempt detected: ${decoded} -> ${resolved}`);
 
-          return context.text('Forbidden', 403);
-        }
+        return context.text('Forbidden', 403);
       }
 
-      return next();
+      return serveStatic({ ...options, path: rewritten })(context, next);
     };
   }
 
@@ -1105,7 +1106,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const normalizedPath = this.normalizePath(route.path);
 
     const endpoint = route.staticServe
-      ? serveStatic(this.prepareStaticServeOptions(route.staticServe))
+      ? this.prepareStaticEndpoint(route.staticServe)
       : this.prepareHandler(route.handler);
 
     routeEndpointHandlers.add(endpoint);
@@ -1116,7 +1117,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       return;
     }
 
-    const staticHandlers: Handler[] = [this.prepareStaticPathGuard(route.staticServe), endpoint];
+    const staticHandlers: Handler[] = [endpoint];
 
     if (route.staticServe.onNotFound?.override) {
       const handler = this.prepareHandler(route.handler);
