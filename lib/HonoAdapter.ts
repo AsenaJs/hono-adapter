@@ -361,7 +361,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     this.server = bun.serve(serveConfig);
 
-    this.websocketAdapter.startWebsocket(this.server);
+    await this.websocketAdapter.startWebsocket(this.server);
 
     // Log controller-based route information
     if (this.routeQueue.length > 0 || this.wsRouteQueue.length > 0 || this.frontEndRouteQueue.length > 0) {
