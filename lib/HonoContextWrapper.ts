@@ -1,4 +1,5 @@
 import {
+  HttpException,
   ValidatedInput,
   readContractBody,
   readContractForm,
@@ -33,6 +34,12 @@ export const globalMiddlewareHandlers = new WeakSet<object>();
 const TEXT_PLAIN = 'text/plain; charset=UTF-8';
 
 const APPLICATION_JSON = 'application/json';
+
+const invalidJsonBody = (error: unknown): HttpException =>
+  new HttpException(400, {
+    error: 'Invalid JSON in request body',
+    message: error instanceof Error ? error.message : 'Failed to parse JSON',
+  });
 
 const hasEncoding = (value: string): boolean => value.includes('%') || value.includes('+');
 
@@ -280,6 +287,8 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
    * `req.valid('json')`; nothing on this context read it.
    *
    * Routes without a validator are unaffected - `valid('json')` is undefined and we fall through.
+   *
+   * @throws HttpException - 400 Bad Request when the raw body is not valid JSON
    */
   public getBody<T = keyof I extends never ? any : InputOutput<I, 'body'>>(): Promise<T> {
     try {
@@ -294,7 +303,9 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
         return Promise.resolve(validated);
       }
 
-      return req.json<T>();
+      return req.json<T>().catch((error: unknown) => {
+        throw invalidJsonBody(error);
+      });
     } catch (error) {
       return Promise.reject(error as Error);
     }
