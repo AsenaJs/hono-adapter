@@ -28,8 +28,8 @@ import { bufferToFormData } from 'hono/utils/buffer';
 
 const VALIDATED_INPUT_KEY = '_asenaValidatedInput';
 
-/** @internal Handlers the adapter registers with `app.use` for global middlewares. */
-export const globalMiddlewareHandlers = new WeakSet<object>();
+/** @internal Endpoint handlers the adapter registers for routes; middleware never lands here. */
+export const routeEndpointHandlers = new WeakSet<object>();
 
 const TEXT_PLAIN = 'text/plain; charset=UTF-8';
 
@@ -186,7 +186,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   public get routePattern(): string | undefined {
     try {
       for (const route of this._context.req.matchedRoutes) {
-        if (!globalMiddlewareHandlers.has(route.handler)) {
+        if (routeEndpointHandlers.has(route.handler)) {
           return route.path;
         }
       }

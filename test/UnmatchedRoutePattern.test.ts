@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { Server } from 'bun';
+import { Hono } from 'hono';
 import type { BaseMiddleware } from '@asenajs/asena/adapter';
 import type { Context as HonoAdapterContext } from '../lib/defaults';
 import { createTestAdapter, registerRoute, startTestServer } from './utils/testHelpers';
@@ -27,9 +28,9 @@ describe('routePattern on matched and unmatched requests', () => {
     server = undefined;
   });
 
-  async function boot(config?: { include?: string[]; exclude?: string[] }) {
+  async function boot(config?: { include?: string[]; exclude?: string[] }, app?: Hono) {
     const seen: Seen = {};
-    const { adapter } = createTestAdapter();
+    const { adapter } = createTestAdapter({ app });
     let handlerPattern: string | undefined;
 
     adapter.use(recordingMiddleware(seen), config as any);
@@ -85,5 +86,36 @@ describe('routePattern on matched and unmatched requests', () => {
     expect(seen['/api/items/7']).toEqual({ before: '/api/items/:id', after: '/api/items/:id' });
     expect(res.status).toBe(404);
     expect(seen['/nothing/here']).toEqual({ before: undefined, after: undefined });
+  });
+
+  function appWithNativeMiddleware() {
+    const app = new Hono();
+
+    app.use('*', async (_c, next) => {
+      await next();
+    });
+    app.use('/api/*', async (_c, next) => {
+      await next();
+    });
+
+    return app;
+  }
+
+  it('skips native middleware of a custom app when reporting the matched pattern', async () => {
+    const { seen, baseUrl, handlerPattern } = await boot(undefined, appWithNativeMiddleware());
+    const res = await fetch(`${baseUrl}/api/items/42`);
+
+    expect(res.status).toBe(200);
+    expect(handlerPattern()).toBe('/api/items/:id');
+    expect(seen['/api/items/42']).toEqual({ before: '/api/items/:id', after: '/api/items/:id' });
+  });
+
+  it('leaves routePattern unset on an unmatched request through native middleware of a custom app', async () => {
+    const { seen, baseUrl } = await boot(undefined, appWithNativeMiddleware());
+    const res = await fetch(`${baseUrl}/api/missing`);
+
+    expect(res.status).toBe(404);
+    expect('/api/missing' in seen).toBe(true);
+    expect(seen['/api/missing']).toEqual({ before: undefined, after: undefined });
   });
 });

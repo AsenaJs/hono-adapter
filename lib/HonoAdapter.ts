@@ -1,8 +1,8 @@
-import { type Context, type Handler, Hono, type MiddlewareHandler, type ValidationTargets } from 'hono';
+import { type Context, type Handler, Hono, type MiddlewareHandler, type Next, type ValidationTargets } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Server } from 'bun';
 import * as bun from 'bun';
-import { globalMiddlewareHandlers, HonoContextWrapper } from './HonoContextWrapper';
+import { HonoContextWrapper, routeEndpointHandlers } from './HonoContextWrapper';
 import type { BaseStaticServeParams, WebsocketRouteParams } from '@asenajs/asena/adapter';
 import {
   AsenaAdapter,
@@ -817,8 +817,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const { middleware, config } of this.globalMiddlewares) {
       const parsed = middlewareParser([middleware], () => this.server);
 
-      parsed.forEach((handler) => globalMiddlewareHandlers.add(handler));
-
       if (!config) {
         // No pattern filter → apply to all routes
         this.app.use('*', ...parsed);
@@ -845,7 +843,6 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           await next();
         };
 
-        globalMiddlewareHandlers.add(filtered);
         this.app.use('*', filtered);
       }
     }
@@ -939,7 +936,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     const normalizedWsPath = this.normalizePath(`/${wsRoute.path}`);
 
-    (this.app as any).get(normalizedWsPath, ...preparedMiddlewares, async (c: Context, next) => {
+    const upgrade = async (c: Context, next: Next) => {
       const websocketData = c.get('_websocketData') || {};
 
       const id = bun.randomUUIDv7();
@@ -953,7 +950,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       }
 
       await next(); // Failed
-    });
+    };
+
+    routeEndpointHandlers.add(upgrade);
+    (this.app as any).get(normalizedWsPath, ...preparedMiddlewares, upgrade);
   }
 
   /**
@@ -1006,13 +1006,12 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // so registered paths must also not have trailing slash to match.
     const normalizedPath = this.normalizePath(route.path);
 
-    if (route.staticServe) {
-      methodHandler(normalizedPath, ...allMiddlewares, serveStatic(this.prepareStaticServeOptions(route.staticServe)));
-    } else {
-      const handler = this.prepareHandler(route.handler);
+    const endpoint = route.staticServe
+      ? serveStatic(this.prepareStaticServeOptions(route.staticServe))
+      : this.prepareHandler(route.handler);
 
-      methodHandler(normalizedPath, ...allMiddlewares, handler);
-    }
+    routeEndpointHandlers.add(endpoint);
+    methodHandler(normalizedPath, ...allMiddlewares, endpoint);
   }
 
   /**
