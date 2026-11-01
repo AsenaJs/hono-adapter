@@ -185,9 +185,12 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
 
   public get routePattern(): string | undefined {
     try {
-      for (const route of this._context.req.matchedRoutes) {
-        if (routeEndpointHandlers.has(route.handler)) {
-          return route.path;
+      const req = this._context.req;
+      const routes = req.matchedRoutes;
+
+      for (let index = req.routeIndex; index < routes.length; index++) {
+        if (routeEndpointHandlers.has(routes[index].handler)) {
+          return routes[index].path;
         }
       }
 

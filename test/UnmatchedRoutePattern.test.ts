@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, describe, expect, it } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Server } from 'bun';
 import { Hono } from 'hono';
 import type { BaseMiddleware } from '@asenajs/asena/adapter';
@@ -117,5 +120,62 @@ describe('routePattern on matched and unmatched requests', () => {
     expect(res.status).toBe(404);
     expect('/api/missing' in seen).toBe(true);
     expect(seen['/api/missing']).toEqual({ before: undefined, after: undefined });
+  });
+
+  describe('after a static route falls through', () => {
+    const root = mkdtempSync(join(tmpdir(), 'asena-route-pattern-static-'));
+
+    writeFileSync(join(root, 'app.css'), 'body{}');
+
+    afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    async function bootWithFallback() {
+      const seen: Seen = {};
+      const { adapter } = createTestAdapter();
+      const handlerPatterns: (string | undefined)[] = [];
+
+      adapter.use(recordingMiddleware(seen));
+      await registerRoute(adapter, {
+        path: '/assets/:file',
+        handler: (ctx) => ctx.send({ handler: 'assets' }),
+        staticServe: { root, rewriteRequestPath: (requestPath: string) => requestPath.replace('/assets', '') },
+      });
+      await registerRoute(adapter, {
+        path: '/*',
+        handler: (ctx) => {
+          handlerPatterns.push(ctx.routePattern);
+
+          return ctx.send({ handler: 'fallback' });
+        },
+      });
+
+      const started = await startTestServer(adapter);
+
+      server = started.server;
+
+      return { seen, baseUrl: started.baseUrl, handlerPatterns };
+    }
+
+    it('reports the fallback endpoint that answers a missing asset', async () => {
+      const { seen, baseUrl, handlerPatterns } = await bootWithFallback();
+      const res = await fetch(`${baseUrl}/assets/missing.css`);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ handler: 'fallback' });
+      expect(handlerPatterns).toEqual(['/*']);
+      expect(seen['/assets/missing.css']).toEqual({ before: '/assets/:file', after: '/*' });
+    });
+
+    it('keeps the static pattern when the asset is served', async () => {
+      const { seen, baseUrl, handlerPatterns } = await bootWithFallback();
+      const res = await fetch(`${baseUrl}/assets/app.css`);
+
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('body{}');
+      expect(handlerPatterns).toEqual([]);
+      expect(seen['/assets/app.css']).toEqual({ before: '/assets/:file', after: '/assets/:file' });
+    });
   });
 });
