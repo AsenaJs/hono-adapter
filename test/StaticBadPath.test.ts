@@ -25,6 +25,8 @@ const NOT_FOUND = [
   '/static/..\\secret\\secret.txt',
   '/static/..%5csecret%5csecret.txt',
   '/static/../../../../../../../../etc/passwd',
+  '/static/a%00.txt',
+  '/static/hello.txt%00',
 ];
 
 async function rawGet(port: number, target: string): Promise<{ status: number; body: string }> {
@@ -151,8 +153,8 @@ describe('static path decoding', () => {
     expect(probe.handler).toBe(0);
   });
 
-  it('keeps plain, double-encoded and backslash spellings at 404 without leaking a file', async () => {
-    const { probe, port } = await boot();
+  it('keeps plain, double-encoded, backslash and NUL spellings at 404 without leaking a file', async () => {
+    const { probe, logger, port } = await boot();
 
     for (const target of NOT_FOUND) {
       const response = await rawGet(port, target);
@@ -165,6 +167,7 @@ describe('static path decoding', () => {
 
     expect(probe.found).toEqual([]);
     expect(probe.handler).toBe(0);
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('serves an in-root file and rewrites its path exactly once', async () => {
