@@ -2,7 +2,6 @@
 "@asenajs/hono-adapter": patch
 ---
 
-`context.routePattern` now reports the endpoint that is handling the request. When a static route misses a file and Hono
-passes the request on to a later endpoint (e.g. a `/*` fallback), that endpoint and any middleware reading the pattern
-after `next()` see the fallback's pattern instead of the static route's (`/assets/:file`). A middleware reading it before
-`next()` still sees the first endpoint ahead of it.
+`context.routePattern` now reports the endpoint that is handling the request: the first route endpoint at or after the
+handler Hono is running, instead of the first one Hono matched. On a static miss the static route answers, so the
+application's `onNotFound` and any middleware read the static route's pattern (e.g. `/assets/:file`), as on ergenecore.
