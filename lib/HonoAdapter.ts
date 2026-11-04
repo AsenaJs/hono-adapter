@@ -36,6 +36,7 @@ import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
 import type { ZodError, ZodType } from 'zod';
 import { brandHonoHttpException, ValidationError, warnOnNestedHono } from './errors';
 import { middlewareParser } from './utils/middlewareParser';
+import { describeThrown, guardThrows, unwrapThrown } from './utils/nonErrorThrow';
 import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -351,7 +352,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // false` could not suppress it, and a 4xx produced no output at all.
     if (!this.hasErrorHandler) {
       this.app.onError((error, context) =>
-        this.withRequestCookies(this.defaultErrorResponse(error, context.req.path, context.req.method), context),
+        this.withRequestCookies(
+          this.defaultErrorResponse(unwrapThrown(error), context.req.path, context.req.method),
+          context,
+        ),
       );
     }
 
@@ -496,12 +500,13 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   public onError(errorHandler: HonoErrorHandler) {
     this.hasErrorHandler = true;
 
-    this.app.onError(async (error, context) => {
+    this.app.onError(async (carried, context) => {
       // Wrap context for user handler
       const wrapper = this.getRequestWrapper(context);
+      const error = unwrapThrown(carried);
 
       try {
-        const customResponse = await errorHandler(error, wrapper);
+        const customResponse = await errorHandler(error as Error, wrapper);
 
         // A handler that returns nothing is saying "not mine, use the default" - the contract
         // ergenecore's `respondToError` already implements. Matched on the type rather than on
@@ -558,7 +563,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * application with no config and `{error, message, timestamp}` for one whose handler declined,
    * so the same failure produced three different envelopes across the two adapters.
    */
-  private defaultErrorResponse(error: Error, path: string, method: string): Response {
+  private defaultErrorResponse(error: unknown, path: string, method: string): Response {
     this.logHandledError(error, path, method);
 
     // Hono's own class first, and deliberately by `instanceof` rather than by the brand. The brand
@@ -622,18 +627,18 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * `ServerLogger.debug` is optional, so fall back to `info` when an implementation does
    * not provide it.
    */
-  private logHandledError(error: Error, path: string, method: string): void {
+  private logHandledError(error: unknown, path: string, method: string): void {
     if (this.logErrors === false) return;
 
     const status = this.resolveErrorStatus(error);
     const isServerError = status >= 500;
 
     const meta = {
-      message: error.message,
+      message: error instanceof Error ? error.message : describeThrown(error),
       path,
       method,
       status,
-      ...(isServerError ? { stack: error.stack } : {}),
+      ...(isServerError && error instanceof Error ? { stack: error.stack } : {}),
     };
 
     if (isServerError) {
@@ -662,7 +667,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   private prepareHandler(handler: HonoHandler): Handler {
-    return (c: Context) => handler(this.getRequestWrapper(c));
+    return guardThrows((c: Context) => handler(this.getRequestWrapper(c)));
   }
 
   private getRequestWrapper(context: Context): HonoContextWrapper {
@@ -777,7 +782,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       return context.notFound();
     };
 
-    return async (context, next) => {
+    return guardThrows(async (context, next) => {
       const requestPath = context.req.path;
 
       if (!requestPath.includes('%')) return ownMiss(serve, context, next);
@@ -800,7 +805,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       }
 
       return ownMiss(serveStatic({ ...options, path: rewritten }), context, next);
-    };
+    });
   }
 
   /**
@@ -828,14 +833,16 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       }
 
       if (!cache) {
-        validators.push(async (context, next) => {
-          const schema = await validatorHandler.handle();
-          if (!schema) {
-            this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
-            return next();
-          }
-          return this.createValidatorMiddleware(schema, key)(context, next);
-        });
+        validators.push(
+          guardThrows(async (context, next) => {
+            const schema = await validatorHandler.handle();
+            if (!schema) {
+              this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
+              return next();
+            }
+            return this.createValidatorMiddleware(schema, key)(context, next);
+          }),
+        );
         continue;
       }
 
@@ -845,7 +852,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
           continue;
         }
-        validators.push(this.createValidatorMiddleware(schema, key));
+        validators.push(guardThrows(this.createValidatorMiddleware(schema, key)));
       } catch (error) {
         throw new Error(
           `Validator preparation failed for ${routeLabel} target '${key}': ${error instanceof Error ? error.message : String(error)}`,
@@ -1098,10 +1105,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const validateContract = contract ? prepareContextValidation(contract) : undefined;
     const contractValidator: MiddlewareHandler[] = validateContract
       ? [
-          async (context, next) => {
+          guardThrows(async (context, next) => {
             await validateContract(this.getRequestWrapper(context));
             await next();
-          },
+          }),
         ]
       : [];
 
