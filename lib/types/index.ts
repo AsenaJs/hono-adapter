@@ -3,3 +3,4 @@ export * from '../defaults/Context';
 export * from './StaticServeExtras';
 export * from './HonoAdapterOptions';
 export * from './SendPingStrategy';
+export * from './HonoDevtoolsBus';

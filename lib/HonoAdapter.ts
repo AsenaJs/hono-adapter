@@ -25,6 +25,7 @@ import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asena
 import { shouldApplyMiddleware } from '@asenajs/asena/utils';
 import type {
   HonoAdapterOptions,
+  HonoDevtoolsBus,
   HonoErrorHandler,
   HonoHandler,
   HonoNotFoundHandler,
@@ -99,6 +100,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   /** Whether the application registered an onNotFound hook (see start()) */
   private hasNotFoundHandler = false;
+
+  private devtools?: HonoDevtoolsBus;
 
   /**
    * Normalizes a route path for Hono compatibility.
@@ -299,6 +302,20 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     }
   }
 
+  /**
+   * Records every HTTP request for `asena console`: `start()` serves a `fetch` that frames each
+   * request in a record, and the adapter adds the steps only it can see - its own 404, its own
+   * error response and the legacy `validator:` schemas it checks itself.
+   *
+   * Core calls this before any route is registered, and only in a process the console spawned.
+   * Without the call, `start()` serves `app.fetch` itself and nothing on the request path changes.
+   *
+   * @param bus - The server's devtools bus
+   */
+  public attachDevtools(bus: HonoDevtoolsBus): void {
+    this.devtools = bus;
+  }
+
   public use(middleware: BaseMiddleware<HonoAdapterContext>, config?: GlobalMiddlewareRouteConfig) {
     // Store middleware with config for deferred application during route registration
     this.globalMiddlewares.push({ middleware, config });
@@ -363,7 +380,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     const serveConfig: any = {
       ...this.options.serveOptions,
-      fetch: this.app.fetch,
+      fetch: this.devtools ? this.recordRequests(this.devtools, this.app.fetch) : this.app.fetch,
       websocket: this.websocketAdapter.websocket,
     };
 
@@ -419,6 +436,37 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
+   * Frames each request in a devtools record and enters it for the whole dispatch, so every step
+   * lands in it by async context - an `override: true` middleware sees hono's own `Context`, not
+   * the Asena wrapper, so the context object cannot be the key. A websocket upgrade is not a
+   * request the console inspects.
+   */
+  private recordRequests(bus: HonoDevtoolsBus, fetch: Hono['fetch']): Hono['fetch'] {
+    const answeredByAdapter = { kind: 'adapter-default', name: this.name } as const;
+
+    return (request, env, executionCtx) => {
+      if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+        return fetch(request, env, executionCtx);
+      }
+
+      const record = bus.open(request.method, new URL(request.url).pathname);
+
+      return bus.run(record, async () => {
+        try {
+          const response = await fetch(request, env, executionCtx);
+
+          bus.close(record, response.status);
+
+          return response;
+        } catch (error) {
+          bus.close(record, 500, answeredByAdapter);
+          throw error;
+        }
+      });
+    };
+  }
+
+  /**
    * Registers the handler for requests that match no route.
    *
    * Separate from {@link onError}: an unmatched route is a routing outcome, not a thrown error,
@@ -467,6 +515,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * application that shaped its own 404 gets no line from here.
    */
   private defaultNotFoundResponse(path: string, method: string): Response {
+    this.devtools?.step('not-found', this.name);
+
     if (this.logErrors !== false) {
       this.logger.info('Route not found:', { path, method, status: 404 });
     }
@@ -564,6 +614,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * so the same failure produced three different envelopes across the two adapters.
    */
   private defaultErrorResponse(error: unknown, path: string, method: string): Response {
+    this.devtools?.step('adapter-default', this.name);
     this.logHandledError(error, path, method);
 
     // Hono's own class first, and deliberately by `instanceof` rather than by the brand. The brand
@@ -834,7 +885,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
       if (!cache) {
         validators.push(
-          guardThrows(async (context, next) => {
+          this.observeValidator(key, async (context, next) => {
             const schema = await validatorHandler.handle();
             if (!schema) {
               this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
@@ -852,7 +903,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
           continue;
         }
-        validators.push(guardThrows(this.createValidatorMiddleware(schema, key)));
+        validators.push(this.observeValidator(key, this.createValidatorMiddleware(schema, key)));
       } catch (error) {
         throw new Error(
           `Validator preparation failed for ${routeLabel} target '${key}': ${error instanceof Error ? error.message : String(error)}`,
@@ -862,6 +913,23 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     }
 
     return validators;
+  }
+
+  /**
+   * Core never sees a legacy `validator:` schema run, so the adapter records the step, named after
+   * the target it checks: the validator's class is not on the route the adapter receives.
+   */
+  private observeValidator(key: string, validator: MiddlewareHandler): MiddlewareHandler {
+    const guarded = guardThrows(validator);
+    const bus = this.devtools;
+
+    if (!bus) return guarded;
+
+    return (context, next) => {
+      bus.step('validator', key);
+
+      return guarded(context, next);
+    };
   }
 
   private createValidatorMiddleware(
