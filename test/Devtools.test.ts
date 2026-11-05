@@ -465,15 +465,20 @@ describe('HonoAdapter devtools', () => {
           body: JSON.stringify(body),
         });
 
+      /** Core names the validator's component on each handle it builds, as `{ handle, override, name }`. */
       const registerValidated = (
         options: {
           validatorCache?: boolean;
-          validator?: Record<string, unknown>;
-          validatorName?: string;
+          validator?: Record<string, object>;
+          componentName?: string;
+          routeValidatorName?: string;
           handler?: (ctx: Context) => unknown;
         } = {},
-      ) =>
-        adapter.registerRoute({
+      ) => {
+        const componentName = 'componentName' in options ? options.componentName : 'NoteValidator';
+        const handlers = options.validator ?? { json: { handle: noteSchema, override: false } };
+
+        return adapter.registerRoute({
           method: HttpMethod.POST,
           path: '/notes',
           middlewares: [],
@@ -483,11 +488,17 @@ describe('HonoAdapter devtools', () => {
             options.handler ?? ((ctx: Context) => ctx.send({ ok: true }, 201)),
           ),
           staticServe: null,
-          validator: options.validator ?? { json: { handle: noteSchema, override: false } },
+          validator: Object.fromEntries(
+            Object.entries(handlers).map(([target, handler]) => [
+              target,
+              componentName === undefined ? handler : { ...handler, name: componentName },
+            ]),
+          ),
           validatorCache: options.validatorCache ?? true,
           controllerName: 'NoteController',
-          validatorName: 'validatorName' in options ? options.validatorName : 'NoteValidator',
+          ...('routeValidatorName' in options ? { validatorName: options.routeValidatorName } : {}),
         } as any);
+      };
 
       /** What core's `@Catch` chain in front of `onError` does: step each handler it offers the error to. */
       const errorChain = (catchAnswers: boolean, onErrorAnswers: boolean) =>
@@ -530,9 +541,19 @@ describe('HonoAdapter devtools', () => {
         });
       }
 
-      test('a route core gave no validator name keeps the target as the step name', async () => {
+      test('a handle core gave no component name keeps the target as the step name', async () => {
         setup();
-        await registerValidated({ validatorName: undefined });
+        await registerValidated({ componentName: undefined });
+        await boot();
+
+        await post({ title: 'groceries' });
+
+        expect((await settled())[0].steps).toEqual([{ kind: 'validator', name: 'json' }, createStep]);
+      });
+
+      test('the component name comes from the handle, not from a route-level validatorName', async () => {
+        setup();
+        await registerValidated({ componentName: undefined, routeValidatorName: 'NoteValidator' });
         await boot();
 
         await post({ title: 'groceries' });
