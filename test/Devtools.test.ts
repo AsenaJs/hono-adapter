@@ -66,7 +66,6 @@ const createFakeBus = () => {
 const randomPort = () => 10000 + Math.floor(Math.random() * 22000);
 
 const adapterDefault: HonoDevtoolsStep = { kind: 'adapter-default', name: 'HonoAdapter' };
-const adapterNotFound: HonoDevtoolsStep = { kind: 'not-found', name: 'HonoAdapter' };
 
 describe('HonoAdapter devtools', () => {
   let adapter: HonoAdapter;
@@ -310,7 +309,7 @@ describe('HonoAdapter devtools', () => {
 
         expect(response.status).toBe(404);
         expect(await settled()).toEqual([
-          { method: 'POST', path: '/missing/deep', status: 404, steps: [adapterNotFound], answeredBy: adapterNotFound },
+          { method: 'POST', path: '/missing/deep', status: 404, steps: [adapterDefault], answeredBy: adapterDefault },
         ]);
       });
 
@@ -343,8 +342,8 @@ describe('HonoAdapter devtools', () => {
 
         expect((await settled())[0]).toMatchObject({
           status: 404,
-          steps: [{ kind: 'not-found', name: 'NoteNotFound.handle' }, adapterNotFound],
-          answeredBy: adapterNotFound,
+          steps: [{ kind: 'not-found', name: 'NoteNotFound.handle' }, adapterDefault],
+          answeredBy: adapterDefault,
         });
       });
     });

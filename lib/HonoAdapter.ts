@@ -515,7 +515,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * application that shaped its own 404 gets no line from here.
    */
   private defaultNotFoundResponse(path: string, method: string): Response {
-    this.devtools?.step('not-found', this.name);
+    this.devtools?.step('adapter-default', this.name);
 
     if (this.logErrors !== false) {
       this.logger.info('Route not found:', { path, method, status: 404 });
