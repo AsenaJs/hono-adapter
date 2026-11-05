@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { HttpException } from '@asenajs/asena/adapter';
 import { HttpMethod } from '@asenajs/asena/web-types';
 import type { HonoAdapter } from '../lib/HonoAdapter';
+import { ValidationError } from '../lib/errors';
 import type { Context } from '../lib/defaults';
 import type { HonoDevtoolsBus, HonoDevtoolsStep, HonoDevtoolsStepKind } from '../lib/types';
 import { createTestAdapter, createTestMiddleware, registerRoute } from './utils/testHelpers';
@@ -452,78 +453,287 @@ describe('HonoAdapter devtools', () => {
 
     describe('legacy validator', () => {
       const noteSchema = () => z.object({ title: z.string() });
+      const jsonStep: HonoDevtoolsStep = { kind: 'validator', name: 'NoteValidator.json' };
+      const createStep: HonoDevtoolsStep = { kind: 'controller', name: 'NoteController.create' };
+      const catchStep: HonoDevtoolsStep = { kind: 'catch', name: 'ValidationCatcher.handle' };
+      const onErrorStep: HonoDevtoolsStep = { kind: 'config-onError', name: 'AppConfig.onError' };
 
-      const post = (body: unknown) =>
-        fetch(`${baseUrl}/notes`, {
+      const post = (body: unknown, query = '') =>
+        fetch(`${baseUrl}/notes${query}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
 
-      const registerValidated = (validatorCache: boolean, json: unknown = { handle: noteSchema, override: false }) =>
+      const registerValidated = (
+        options: {
+          validatorCache?: boolean;
+          validator?: Record<string, unknown>;
+          validatorName?: string;
+          handler?: (ctx: Context) => unknown;
+        } = {},
+      ) =>
         adapter.registerRoute({
           method: HttpMethod.POST,
           path: '/notes',
           middlewares: [],
-          handler: fake.core('controller', 'NoteController.create', (ctx: Context) => ctx.send({ ok: true }, 201)),
+          handler: fake.core(
+            'controller',
+            'NoteController.create',
+            options.handler ?? ((ctx: Context) => ctx.send({ ok: true }, 201)),
+          ),
           staticServe: null,
-          validator: { json },
-          validatorCache,
+          validator: options.validator ?? { json: { handle: noteSchema, override: false } },
+          validatorCache: options.validatorCache ?? true,
           controllerName: 'NoteController',
+          validatorName: 'validatorName' in options ? options.validatorName : 'NoteValidator',
         } as any);
+
+      /** What core's `@Catch` chain in front of `onError` does: step each handler it offers the error to. */
+      const errorChain = (catchAnswers: boolean, onErrorAnswers: boolean) =>
+        adapter.onError((async (_error: Error, ctx: Context) => {
+          fake.bus.step(catchStep.kind, catchStep.name);
+          if (catchAnswers) return ctx.send({ caught: true }, 422);
+
+          fake.bus.step(onErrorStep.kind, onErrorStep.name);
+          if (onErrorAnswers) return ctx.send({ configured: true }, 409);
+
+          return undefined;
+        }) as any);
 
       for (const validatorCache of [true, false]) {
         describe(validatorCache ? 'cached schema' : 'schema per request', () => {
-          test('a passing body records the validator before the controller', async () => {
+          test('a passing body records the validator, named after its class and target, before the controller', async () => {
             setup();
-            await registerValidated(validatorCache);
+            await registerValidated({ validatorCache });
             await boot();
 
             const response = await post({ title: 'groceries' });
 
             expect(response.status).toBe(201);
-            expect((await settled())[0].steps).toEqual([
-              { kind: 'validator', name: 'json' },
-              { kind: 'controller', name: 'NoteController.create' },
-            ]);
+            expect((await settled())[0].steps).toEqual([jsonStep, createStep]);
           });
 
-          test('a failing body records the validator, then the adapter answer', async () => {
+          test('a failing body with no onError is answered by the validator, not the adapter', async () => {
             setup();
-            await registerValidated(validatorCache);
+            await registerValidated({ validatorCache });
             await boot();
 
             const response = await post({ title: 7 });
 
             expect(response.status).toBe(400);
-            expect((await settled())[0]).toMatchObject({
-              status: 400,
-              steps: [{ kind: 'validator', name: 'json' }, adapterDefault],
-              answeredBy: adapterDefault,
-            });
+            expect(await response.json()).toMatchObject({ error: 'Validation failed', target: 'json' });
+            expect(await settled()).toEqual([
+              { method: 'POST', path: '/notes', status: 400, steps: [jsonStep], answeredBy: jsonStep },
+            ]);
           });
         });
       }
 
+      test('a route core gave no validator name keeps the target as the step name', async () => {
+        setup();
+        await registerValidated({ validatorName: undefined });
+        await boot();
+
+        await post({ title: 'groceries' });
+
+        expect((await settled())[0].steps).toEqual([{ kind: 'validator', name: 'json' }, createStep]);
+      });
+
+      test('the validator that failed answers, not the one before it', async () => {
+        setup();
+        await registerValidated({
+          validator: {
+            json: { handle: noteSchema, override: false },
+            query: { handle: () => z.object({ page: z.string() }), override: false },
+          },
+        });
+        await boot();
+
+        const response = await post({ title: 'groceries' });
+        const queryStep: HonoDevtoolsStep = { kind: 'validator', name: 'NoteValidator.query' };
+
+        expect(response.status).toBe(400);
+        expect((await settled())[0]).toMatchObject({
+          status: 400,
+          steps: [jsonStep, queryStep],
+          answeredBy: queryStep,
+        });
+      });
+
+      test('an onError that declines leaves the answer with the validator', async () => {
+        setup();
+        adapter.onError(fake.core('config-onError', 'AppConfig.onError', () => undefined) as any);
+        await registerValidated();
+        await boot();
+
+        const response = await post({ title: 7 });
+
+        expect(response.status).toBe(400);
+        expect((await settled())[0]).toMatchObject({
+          status: 400,
+          steps: [jsonStep, onErrorStep],
+          answeredBy: jsonStep,
+        });
+      });
+
+      test('an onError that throws leaves the answer with the validator', async () => {
+        setup();
+        adapter.onError(
+          fake.core('config-onError', 'AppConfig.onError', () => {
+            throw new Error('handler failed');
+          }) as any,
+        );
+        await registerValidated();
+        await boot();
+
+        const response = await post({ title: 7 });
+
+        expect(response.status).toBe(400);
+        expect((await settled())[0]).toMatchObject({ steps: [jsonStep, onErrorStep], answeredBy: jsonStep });
+      });
+
+      test('an onError that answers is the answering step, after the validator', async () => {
+        setup();
+        adapter.onError(
+          fake.core('config-onError', 'AppConfig.onError', (_error: Error, ctx: Context) =>
+            ctx.send({ configured: true }, 409),
+          ) as any,
+        );
+        await registerValidated();
+        await boot();
+
+        const response = await post({ title: 7 });
+
+        expect(response.status).toBe(409);
+        expect((await settled())[0]).toMatchObject({
+          status: 409,
+          steps: [jsonStep, onErrorStep],
+          answeredBy: onErrorStep,
+        });
+      });
+
+      test('a @Catch that answers is the answering step, after the validator', async () => {
+        setup();
+        errorChain(true, false);
+        await registerValidated();
+        await boot();
+
+        const response = await post({ title: 7 });
+
+        expect(response.status).toBe(422);
+        expect((await settled())[0]).toMatchObject({
+          status: 422,
+          steps: [jsonStep, catchStep],
+          answeredBy: catchStep,
+        });
+      });
+
+      test('a @Catch and an onError that both decline leave the answer with the validator', async () => {
+        setup();
+        errorChain(false, false);
+        await registerValidated();
+        await boot();
+
+        const response = await post({ title: 7 });
+
+        expect(response.status).toBe(400);
+        expect((await settled())[0]).toMatchObject({
+          status: 400,
+          steps: [jsonStep, catchStep, onErrorStep],
+          answeredBy: jsonStep,
+        });
+      });
+
       test('a hook that answers makes the validator the answering step', async () => {
         setup();
-        await registerValidated(true, {
-          handle: () => ({
-            schema: noteSchema(),
-            hook: (result: { success: boolean }, c: HonoContext) =>
-              result.success ? undefined : c.json({ invalid: true }, 422),
-          }),
-          override: false,
+        await registerValidated({
+          validator: {
+            json: {
+              handle: () => ({
+                schema: noteSchema(),
+                hook: (result: { success: boolean }, c: HonoContext) =>
+                  result.success ? undefined : c.json({ invalid: true }, 422),
+              }),
+              override: false,
+            },
+          },
         });
         await boot();
 
         const response = await post({});
 
         expect(response.status).toBe(422);
+        expect((await settled())[0]).toMatchObject({ status: 422, steps: [jsonStep], answeredBy: jsonStep });
+      });
+
+      test('a hook that declines leaves the failure, and the answer, with the validator', async () => {
+        setup();
+        await registerValidated({
+          validator: { json: { handle: () => ({ schema: noteSchema(), hook: () => undefined }), override: false } },
+        });
+        await boot();
+
+        const response = await post({});
+
+        expect(response.status).toBe(400);
+        expect((await settled())[0]).toMatchObject({ status: 400, steps: [jsonStep], answeredBy: jsonStep });
+      });
+
+      test('a controller throw after a passing validator is still answered by the adapter', async () => {
+        setup();
+        await registerValidated({
+          handler: () => {
+            throw new Error('boom');
+          },
+        });
+        await boot();
+
+        const response = await post({ title: 'groceries' });
+
+        expect(response.status).toBe(500);
         expect((await settled())[0]).toMatchObject({
-          status: 422,
-          steps: [{ kind: 'validator', name: 'json' }],
-          answeredBy: { kind: 'validator', name: 'json' },
+          status: 500,
+          steps: [jsonStep, createStep, adapterDefault],
+          answeredBy: adapterDefault,
+        });
+      });
+
+      test('a ValidationError the controller throws itself is answered by the adapter', async () => {
+        setup();
+        await registerValidated({
+          handler: () => {
+            throw new ValidationError(z.object({ id: z.string() }).safeParse({}).error!, 'param');
+          },
+        });
+        await boot();
+
+        const response = await post({ title: 'groceries' });
+
+        expect(response.status).toBe(400);
+        expect((await settled())[0]).toMatchObject({
+          status: 400,
+          steps: [jsonStep, createStep, adapterDefault],
+          answeredBy: adapterDefault,
+        });
+      });
+
+      test('concurrent failing and passing requests keep their own answers', async () => {
+        setup();
+        await registerValidated();
+        await boot();
+
+        await Promise.all([post({ title: 7 }), post({ title: 'groceries' })]);
+
+        const records = await settled(2);
+
+        expect(records.find((record) => record.status === 400)).toMatchObject({
+          steps: [jsonStep],
+          answeredBy: jsonStep,
+        });
+        expect(records.find((record) => record.status === 201)).toMatchObject({
+          steps: [jsonStep, createStep],
+          answeredBy: createStep,
         });
       });
     });
