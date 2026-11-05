@@ -79,9 +79,10 @@ const cookieIdentity = (setCookie: string, requestPath: string): string => {
   return `${(separator === -1 ? '' : pair.slice(0, separator)).trim()}\u0000${domain}\u0000${path}`;
 };
 
-// The handle is bound, so its class is gone; core names the component on the handler (published core does not yet).
-const validatorStepName = (handler: object, target: string): string => {
-  const component = (handler as { name?: unknown }).name;
+// The handle is bound, so its class is gone; core passes the component as the route's `validatorName`,
+// read structurally because the published core's RouteParams does not declare it. Ergenecore reads the same field.
+const validatorStepName = (route: object, target: string): string => {
+  const component = (route as { validatorName?: unknown }).validatorName;
 
   return typeof component === 'string' && component !== '' ? `${component}.${target}` : target;
 };
@@ -890,6 +891,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     baseValidator: BaseValidator<ValidationSchema | ValidationSchemaWithHook>,
     cache: boolean,
     routeLabel: string,
+    route: object,
   ): Promise<MiddlewareHandler[]> {
     if (!baseValidator) {
       return [];
@@ -905,7 +907,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         continue;
       }
 
-      const stepName = validatorStepName(validatorHandler, key);
+      const stepName = validatorStepName(route, key);
 
       if (!cache) {
         validators.push(
@@ -1200,7 +1202,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       : [];
     const preparedMiddlewares = this.prepareMiddlewares(route.middlewares || []);
     const validators = route.validator
-      ? await this.prepareValidator(route.validator, route.validatorCache !== false, routeLabel)
+      ? await this.prepareValidator(route.validator, route.validatorCache !== false, routeLabel, route)
       : [];
     const contract = route.contextContract ?? contextClass?.[ASENA_CONTEXT_CONTRACT];
     const validateContract = contract ? prepareContextValidation(contract) : undefined;
