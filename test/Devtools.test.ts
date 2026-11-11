@@ -29,9 +29,12 @@ const createFakeBus = () => {
   const storage = new AsyncLocalStorage<FakeRecord>();
   const closed: ClosedRecord[] = [];
   let opened = 0;
+  let enabled = true;
 
   const bus: HonoDevtoolsBus<FakeRecord> = {
-    enabled: true,
+    get enabled() {
+      return enabled;
+    },
     open: (method, path) => {
       opened += 1;
 
@@ -61,7 +64,15 @@ const createFakeBus = () => {
     };
   };
 
-  return { bus, closed, core, opened: () => opened };
+  return {
+    bus,
+    closed,
+    core,
+    opened: () => opened,
+    setEnabled: (value: boolean) => {
+      enabled = value;
+    },
+  };
 };
 
 const randomPort = () => 10000 + Math.floor(Math.random() * 22000);
@@ -299,6 +310,77 @@ describe('HonoAdapter devtools', () => {
       await Bun.sleep(5);
 
       expect(fake.opened()).toBe(0);
+    });
+
+    describe('while the bus is disabled', () => {
+      const postNote = (body: unknown) =>
+        fetch(`${baseUrl}/notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+      const registerValidatedNote = () =>
+        adapter.registerRoute({
+          method: HttpMethod.POST,
+          path: '/notes',
+          middlewares: [],
+          handler: (ctx: Context) => ctx.send({ ok: true }, 201),
+          staticServe: null,
+          validator: { json: { handle: () => z.object({ title: z.string() }), override: false } },
+          validatorName: 'NoteValidator',
+        } as any);
+
+      test('a request opens no record and enters no async context', async () => {
+        setup();
+
+        const run = spyOn(fake.bus, 'run');
+
+        await registerRoute(adapter, { path: '/notes' });
+        await boot();
+        fake.setEnabled(false);
+
+        const response = await fetch(`${baseUrl}/notes`);
+
+        expect(response.status).toBe(200);
+        expect(fake.opened()).toBe(0);
+        expect(run).not.toHaveBeenCalled();
+        expect(fake.closed).toEqual([]);
+      });
+
+      test('a legacy validator records no step and its failure is still answered 400', async () => {
+        setup();
+
+        const step = spyOn(fake.bus, 'step');
+
+        await registerValidatedNote();
+        await boot();
+        fake.setEnabled(false);
+
+        const passing = await postNote({ title: 'groceries' });
+        const failing = await postNote({ title: 7 });
+
+        expect(passing.status).toBe(201);
+        expect(failing.status).toBe(400);
+        expect(step.mock.calls.filter(([kind]) => kind === 'validator')).toEqual([]);
+        expect(fake.opened()).toBe(0);
+      });
+
+      test('records again once the bus is enabled', async () => {
+        setup();
+        await registerRoute(adapter, {
+          path: '/notes',
+          handler: fake.core('controller', 'NoteController.list', (ctx: Context) => ctx.send([])),
+        });
+        await boot();
+        fake.setEnabled(false);
+        await fetch(`${baseUrl}/notes`);
+        fake.setEnabled(true);
+        await fetch(`${baseUrl}/notes`);
+
+        expect(await settled()).toHaveLength(1);
+        expect(fake.opened()).toBe(1);
+      });
     });
 
     describe('unmatched routes', () => {

@@ -451,13 +451,13 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Frames each request in a devtools record and enters it for the whole dispatch, so every step
    * lands in it by async context - an `override: true` middleware sees hono's own `Context`, not
    * the Asena wrapper, so the context object cannot be the key. A websocket upgrade is not a
-   * request the console inspects.
+   * request the console inspects, and core can disable the bus while the server keeps serving.
    */
   private recordRequests(bus: HonoDevtoolsBus, fetch: Hono['fetch']): Hono['fetch'] {
     const answeredByAdapter = { kind: 'adapter-default', name: this.name } as const;
 
     return (request, env, executionCtx) => {
-      if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+      if (!bus.enabled || request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
         return fetch(request, env, executionCtx);
       }
 
@@ -955,6 +955,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const step: HonoDevtoolsStep = { kind: 'validator', name };
 
     return async (context, next) => {
+      if (!bus.enabled) return guarded(context, next);
+
       bus.step(step.kind, step.name);
 
       try {
