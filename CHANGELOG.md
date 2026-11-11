@@ -1,5 +1,30 @@
 # @asenajs/hono-adapter
 
+## 5.2.0
+
+### Minor Changes
+
+- a63ad40: Under `asena console`, every HTTP request appears in the request inspector with its method, path, final status,
+  duration and the chain it went through, including the steps only the adapter sees: its own 404, its own error response
+  and legacy `validator:` schemas. A validation failure no `@Catch` or `onError` answered is credited to the validator
+  that failed, not to the adapter. The adapter records nothing unless the console attached to the process; otherwise the
+  server's `fetch` is `app.fetch` itself, which is always the case under `NODE_ENV=production`. While core has its
+  devtools bus disabled, an attached adapter passes each request straight to `app.fetch` and records no step, its own
+  404 and error response included. With several servers in one process, a request is reported as the server's that
+  answered it.
+
+### Patch Changes
+
+- d59f268: A value thrown that is not an `Error` (`throw 'text'`, `throw 42`, `throw { code: 1 }`) from a route handler, a
+  middleware or a validator reaches the application's error handling unchanged, as it does on ergenecore: the `@Catch()`
+  catch-all first, then `ConfigService.onError`. With no handler, or when every handler declines, the adapter answers its
+  default 500 JSON body and logs the value.
+
+  A route handler may return any thenable, not only a `Promise`: the request is answered with the `Response` it resolves
+  to, and a rejection takes the same error path as a throw.
+
+  Accept `@asenajs/asena` 0.13 as a peer.
+
 ## 5.1.0
 
 ### Minor Changes
