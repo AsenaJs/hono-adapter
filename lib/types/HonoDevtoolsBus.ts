@@ -15,8 +15,9 @@ export interface HonoDevtoolsStep {
 
 /**
  * The members of core's devtools bus this adapter relies on, declared structurally so the adapter
- * builds against a core that has no devtools. `AsenaServer.start()` hands the bus over through
- * {@link HonoAdapter.attachDevtools} only in a process `asena console` spawned.
+ * builds against a core that has no devtools. `AsenaServer.start()` hands each adapter its own
+ * server's view of the bus through {@link HonoAdapter.attachDevtools}, only in a process
+ * `asena console` spawned.
  *
  * @typeParam R - The record `open()` returns; opaque to the adapter
  */

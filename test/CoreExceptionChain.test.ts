@@ -404,6 +404,93 @@ describe.skipIf(!hasChain)('core exception chain over the Hono adapter', () => {
       ]);
     });
 
+    test('with two servers in one process a request is recorded under the id of the server that answered it', async () => {
+      process.env.NODE_ENV = 'development';
+
+      @Controller('/north')
+      class NorthController {
+        @Get('/')
+        public list(context: Context) {
+          return context.send({ from: 'north' });
+        }
+      }
+
+      @Controller('/south')
+      class SouthController {
+        @Get('/')
+        public list(context: Context) {
+          return context.send({ from: 'south' });
+        }
+      }
+
+      const contexts: any[] = [];
+      const servers: any[] = [];
+
+      process.send = (() => true) as typeof process.send;
+      globals[DEVTOOLS_HOOK] = (context: any) => {
+        contexts.push(context);
+
+        return { detach: () => {} };
+      };
+
+      const bootOne = async (components: any[]) => {
+        const { logger } = capturingLogger();
+        const [ownAdapter] = createHonoAdapter(logger);
+        const instance = await AsenaServerFactory.create({ adapter: ownAdapter as any, logger, port: 0, components });
+
+        servers.push(instance);
+        await instance.start();
+
+        return `http://localhost:${instance.httpServer?.port}`;
+      };
+
+      try {
+        const northUrl = await bootOne([NorthController]);
+        const southUrl = await bootOne([SouthController]);
+        const [north, south] = contexts;
+
+        expect(typeof north.serverId).toBe('string');
+        expect(typeof south.serverId).toBe('string');
+        expect(south.serverId).not.toBe(north.serverId);
+
+        const seen: [string, number, string[], string | undefined][] = [];
+
+        north.bus.subscribe((record: any, serverId: string | undefined) =>
+          seen.push([record.path, record.status, record.steps.map((step: any) => step.name), serverId]),
+        );
+
+        const responses = await Promise.all([
+          fetch(`${northUrl}/north`),
+          fetch(`${southUrl}/south`),
+          fetch(`${northUrl}/south`),
+          fetch(`${southUrl}/north`),
+          fetch(`${southUrl}/south`),
+        ]);
+
+        expect(responses.map((response) => response.status)).toEqual([200, 200, 404, 404, 200]);
+
+        for (let i = 0; i < 50 && seen.length < 5; i++) {
+          await Bun.sleep(1);
+        }
+
+        const sorted = (rows: typeof seen) => rows.map((row) => JSON.stringify(row)).sort();
+
+        expect(sorted(seen)).toEqual(
+          sorted([
+            ['/north', 200, ['NorthController.list'], north.serverId],
+            ['/south', 404, ['HonoAdapter'], north.serverId],
+            ['/south', 200, ['SouthController.list'], south.serverId],
+            ['/south', 200, ['SouthController.list'], south.serverId],
+            ['/north', 404, ['HonoAdapter'], south.serverId],
+          ]),
+        );
+      } finally {
+        for (const instance of servers) {
+          await instance.stop(true);
+        }
+      }
+    });
+
     test('NODE_ENV=production keeps the bus off: app.fetch is served itself and nothing is recorded', async () => {
       process.env.NODE_ENV = 'production';
       installHook();
