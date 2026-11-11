@@ -37,6 +37,7 @@ const capturingLogger = () => {
 type Site =
   | 'sync handler'
   | 'async handler'
+  | 'thenable handler'
   | 'route middleware'
   | 'override middleware'
   | 'global middleware'
@@ -64,7 +65,9 @@ const register = async (adapter: HonoAdapter, site: Site, value: unknown) => {
         ? raise
         : site === 'async handler'
           ? async () => raise()
-          : (context: Context) => context.send({ reached: true }),
+          : site === 'thenable handler'
+            ? () => ({ then: (_resolve: unknown, reject: (reason: unknown) => void) => reject(value) })
+            : (context: Context) => context.send({ reached: true }),
     staticServe: null,
     validator:
       site === 'validator schema'
@@ -78,6 +81,7 @@ const register = async (adapter: HonoAdapter, site: Site, value: unknown) => {
 const sites: Site[] = [
   'sync handler',
   'async handler',
+  'thenable handler',
   'route middleware',
   'override middleware',
   'global middleware',
@@ -199,5 +203,29 @@ describe('a thrown non-Error value', () => {
     const entry = entries.find((e) => e.message === 'Application error occurred:');
 
     expect(entry?.meta.message).toBe('[object Object]');
+  });
+
+  it('answers with what a thenable returned by the handler settles to', async () => {
+    const adapter = new HonoAdapter({ logger: capturingLogger().logger });
+
+    adapter.setPort(0);
+    await adapter.registerRoute({
+      method: HttpMethod.POST,
+      path: '/fail',
+      middlewares: [],
+      handler: (context: Context) => ({
+        then: (resolve: (value: unknown) => void) => {
+          setTimeout(() => resolve(context.send({ later: true }, 202)), 5);
+        },
+      }),
+      staticServe: null,
+      validator: null,
+    } as any);
+    server = await adapter.start();
+
+    const response = await request();
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ later: true });
   });
 });

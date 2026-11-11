@@ -21,6 +21,9 @@ export const describeThrown = (value: unknown): string => {
   }
 };
 
+const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+  typeof (value as { then?: unknown } | null | undefined)?.then === 'function';
+
 const rethrowAsError = (value: unknown): never => {
   throw asError(value);
 };
@@ -30,7 +33,10 @@ export const guardThrows = <H extends (context: Context, next: Next) => unknown>
     try {
       const result = handler(context, next);
 
-      return result instanceof Promise ? result.catch(rethrowAsError) : result;
+      if (result instanceof Promise) return result.catch(rethrowAsError);
+
+      // Hono awaits only a real Promise: any other thenable would be handed to Bun as the response.
+      return isThenable(result) ? Promise.resolve(result).catch(rethrowAsError) : result;
     } catch (error) {
       throw asError(error);
     }
