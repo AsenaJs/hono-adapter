@@ -323,7 +323,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Core calls this before any route is registered, and only in a process the console spawned.
    * Without the call, `start()` serves `app.fetch` itself and nothing on the request path changes.
    *
-   * @param bus - The server's devtools bus
+   * @param bus - Core's devtools bus as this adapter's server sees it: a record opened through it
+   * is reported as that server's
    */
   public attachDevtools(bus: HonoDevtoolsBus): void {
     this.devtools = bus;
@@ -527,7 +528,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * application that shaped its own 404 gets no line from here.
    */
   private defaultNotFoundResponse(path: string, method: string): Response {
-    this.devtools?.step('adapter-default', this.name);
+    this.recordAdapterDefault();
 
     if (this.logErrors !== false) {
       this.logger.info('Route not found:', { path, method, status: 404 });
@@ -668,8 +669,12 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     if (validator) {
       this.answeredByValidator?.set(request, validator);
     } else {
-      this.devtools?.step('adapter-default', this.name);
+      this.recordAdapterDefault();
     }
+  }
+
+  private recordAdapterDefault(): void {
+    if (this.devtools?.enabled) this.devtools.step('adapter-default', this.name);
   }
 
   /**

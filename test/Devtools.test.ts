@@ -366,6 +366,31 @@ describe('HonoAdapter devtools', () => {
         expect(fake.opened()).toBe(0);
       });
 
+      test('the adapter answers its default 404 and 500 without recording a step', async () => {
+        setup();
+
+        const step = spyOn(fake.bus, 'step');
+
+        await registerRoute(adapter, {
+          path: '/boom',
+          handler: () => {
+            throw new Error('boom');
+          },
+        });
+        await boot();
+        fake.setEnabled(false);
+
+        const missing = await fetch(`${baseUrl}/missing`);
+        const failed = await fetch(`${baseUrl}/boom`);
+
+        expect(missing.status).toBe(404);
+        expect(await missing.json()).toEqual({ error: 'Not Found' });
+        expect(failed.status).toBe(500);
+        expect(await failed.json()).toEqual({ error: 'Internal Server Error' });
+        expect(step).not.toHaveBeenCalled();
+        expect(fake.opened()).toBe(0);
+      });
+
       test('records again once the bus is enabled', async () => {
         setup();
         await registerRoute(adapter, {
