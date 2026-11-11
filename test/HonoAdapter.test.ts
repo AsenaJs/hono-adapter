@@ -1173,7 +1173,7 @@ describe('HonoAdapter', () => {
       // Before the envelope moved onto `ValidationError.getResponse()`, this fell back to
       // `HTTPException`'s bare `Validation failed` text - so the body depended on whether an
       // unrelated hook existed, which is exactly what the single path removed.
-      adapter.onError((() => undefined) as any);
+      adapter.onError(() => undefined);
 
       const schema = z.object({ email: z.string().min(3) });
 

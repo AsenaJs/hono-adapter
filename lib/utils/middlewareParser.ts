@@ -4,6 +4,7 @@ import { HonoContextWrapper } from '../HonoContextWrapper';
 import { createFactory } from 'hono/factory';
 import type { Context as HonoAdapterContext } from '../defaults';
 import type { BaseMiddleware } from '@asenajs/asena/adapter';
+import { asError, guardThrows } from './nonErrorThrow';
 
 /**
  * Parses Asena middlewares to Hono middleware format with optimizations
@@ -23,7 +24,7 @@ export const middlewareParser = (
   return middlewares.map((middleware) => {
     if (middleware.override) {
       // @ts-expect-error - Allow override middleware to use raw Hono context
-      return (c: Context, next: Function) => middleware.handle(c, next);
+      return guardThrows((c: Context, next: Next) => middleware.handle(c, next));
     }
 
     return factory.createMiddleware(async (context: Context, next: Next) => {
@@ -35,7 +36,6 @@ export const middlewareParser = (
         context.set('_asenaContextWrapper', wrapper);
       }
 
-      // eslint-disable-next-line no-useless-catch
       try {
         // Call middleware handler
         const result = await middleware.handle(wrapper, next);
@@ -63,8 +63,7 @@ export const middlewareParser = (
         // If middleware didn't call next(), we call it here
         // Note: Hono middleware should handle next() calls properly
       } catch (error) {
-        // Let Hono's error handler catch it
-        throw error;
+        throw asError(error);
       }
     });
   });

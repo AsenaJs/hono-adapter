@@ -163,7 +163,7 @@ describe('an error response keeps the cookies set earlier in the request', () =>
   });
 
   test('an onError that declines falls back to the default and keeps the cookies', async () => {
-    const baseUrl = await boot((adapter) => adapter.onError((() => undefined) as any));
+    const baseUrl = await boot((adapter) => adapter.onError(() => undefined));
     const response = await fetch(`${baseUrl}/forbidden`);
 
     expect(response.status).toBe(403);

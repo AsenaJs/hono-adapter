@@ -73,7 +73,7 @@ describe('core HttpException on the hono adapter', () => {
         isHttpException(thrown) ? context.send({ mine: true }, thrown.status) : context.send({ mine: false }, 500),
       );
     } else if (onError === 'declines') {
-      adapter.onError((() => undefined) as any);
+      adapter.onError(() => undefined);
     }
 
     server = (await adapter.start()) as any;

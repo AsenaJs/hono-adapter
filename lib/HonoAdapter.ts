@@ -25,6 +25,8 @@ import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asena
 import { shouldApplyMiddleware } from '@asenajs/asena/utils';
 import type {
   HonoAdapterOptions,
+  HonoDevtoolsBus,
+  HonoDevtoolsStep,
   HonoErrorHandler,
   HonoHandler,
   HonoNotFoundHandler,
@@ -36,6 +38,7 @@ import type { ValidationSchema, ValidationSchemaWithHook } from './defaults';
 import type { ZodError, ZodType } from 'zod';
 import { brandHonoHttpException, ValidationError, warnOnNestedHono } from './errors';
 import { middlewareParser } from './utils/middlewareParser';
+import { describeThrown, guardThrows, unwrapThrown } from './utils/nonErrorThrow';
 import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -76,6 +79,14 @@ const cookieIdentity = (setCookie: string, requestPath: string): string => {
   return `${(separator === -1 ? '' : pair.slice(0, separator)).trim()}\u0000${domain}\u0000${path}`;
 };
 
+// The handle is bound, so its class is gone; core passes the component as the route's `validatorName`,
+// read structurally because the published core's RouteParams does not declare it. Ergenecore reads the same field.
+const validatorStepName = (route: object, target: string): string => {
+  const component = (route as { validatorName?: unknown }).validatorName;
+
+  return typeof component === 'string' && component !== '' ? `${component}.${target}` : target;
+};
+
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
 
@@ -98,6 +109,12 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   /** Whether the application registered an onNotFound hook (see start()) */
   private hasNotFoundHandler = false;
+
+  private devtools?: HonoDevtoolsBus;
+
+  private failedValidations?: WeakMap<ValidationError, HonoDevtoolsStep>;
+
+  private answeredByValidator?: WeakMap<Request, HonoDevtoolsStep>;
 
   /**
    * Normalizes a route path for Hono compatibility.
@@ -298,6 +315,23 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     }
   }
 
+  /**
+   * Records every HTTP request for `asena console`: `start()` serves a `fetch` that frames each
+   * request in a record, and the adapter adds the steps only it can see - its own 404, its own
+   * error response and the legacy `validator:` schemas it checks itself.
+   *
+   * Core calls this before any route is registered, and only in a process the console spawned.
+   * Without the call, `start()` serves `app.fetch` itself and nothing on the request path changes.
+   *
+   * @param bus - Core's devtools bus as this adapter's server sees it: a record opened through it
+   * is reported as that server's
+   */
+  public attachDevtools(bus: HonoDevtoolsBus): void {
+    this.devtools = bus;
+    this.failedValidations = new WeakMap();
+    this.answeredByValidator = new WeakMap();
+  }
+
   public use(middleware: BaseMiddleware<HonoAdapterContext>, config?: GlobalMiddlewareRouteConfig) {
     // Store middleware with config for deferred application during route registration
     this.globalMiddlewares.push({ middleware, config });
@@ -351,7 +385,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     // false` could not suppress it, and a 4xx produced no output at all.
     if (!this.hasErrorHandler) {
       this.app.onError((error, context) =>
-        this.withRequestCookies(this.defaultErrorResponse(error, context.req.path, context.req.method), context),
+        this.withRequestCookies(this.defaultErrorResponse(unwrapThrown(error), context), context),
       );
     }
 
@@ -359,7 +393,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     const serveConfig: any = {
       ...this.options.serveOptions,
-      fetch: this.app.fetch,
+      fetch: this.devtools ? this.recordRequests(this.devtools, this.app.fetch) : this.app.fetch,
       websocket: this.websocketAdapter.websocket,
     };
 
@@ -415,6 +449,37 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   /**
+   * Frames each request in a devtools record and enters it for the whole dispatch, so every step
+   * lands in it by async context - an `override: true` middleware sees hono's own `Context`, not
+   * the Asena wrapper, so the context object cannot be the key. A websocket upgrade is not a
+   * request the console inspects, and core can disable the bus while the server keeps serving.
+   */
+  private recordRequests(bus: HonoDevtoolsBus, fetch: Hono['fetch']): Hono['fetch'] {
+    const answeredByAdapter = { kind: 'adapter-default', name: this.name } as const;
+
+    return (request, env, executionCtx) => {
+      if (!bus.enabled || request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+        return fetch(request, env, executionCtx);
+      }
+
+      const record = bus.open(request.method, new URL(request.url).pathname);
+
+      return bus.run(record, async () => {
+        try {
+          const response = await fetch(request, env, executionCtx);
+
+          bus.close(record, response.status, this.answeredByValidator?.get(request));
+
+          return response;
+        } catch (error) {
+          bus.close(record, 500, answeredByAdapter);
+          throw error;
+        }
+      });
+    };
+  }
+
+  /**
    * Registers the handler for requests that match no route.
    *
    * Separate from {@link onError}: an unmatched route is a routing outcome, not a thrown error,
@@ -463,6 +528,8 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * application that shaped its own 404 gets no line from here.
    */
   private defaultNotFoundResponse(path: string, method: string): Response {
+    this.recordAdapterDefault();
+
     if (this.logErrors !== false) {
       this.logger.info('Route not found:', { path, method, status: 404 });
     }
@@ -496,12 +563,13 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   public onError(errorHandler: HonoErrorHandler) {
     this.hasErrorHandler = true;
 
-    this.app.onError(async (error, context) => {
+    this.app.onError(async (carried, context) => {
       // Wrap context for user handler
       const wrapper = this.getRequestWrapper(context);
+      const error = unwrapThrown(carried);
 
       try {
-        const customResponse = await errorHandler(error, wrapper);
+        const customResponse = await errorHandler(error as Error, wrapper);
 
         // A handler that returns nothing is saying "not mine, use the default" - the contract
         // ergenecore's `respondToError` already implements. Matched on the type rather than on
@@ -518,7 +586,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         this.logger.error('Error handler threw an error, using the default response:', handlerError);
       }
 
-      return this.withRequestCookies(this.defaultErrorResponse(error, context.req.path, context.req.method), context);
+      return this.withRequestCookies(this.defaultErrorResponse(error, context), context);
     });
   }
 
@@ -558,8 +626,9 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * application with no config and `{error, message, timestamp}` for one whose handler declined,
    * so the same failure produced three different envelopes across the two adapters.
    */
-  private defaultErrorResponse(error: Error, path: string, method: string): Response {
-    this.logHandledError(error, path, method);
+  private defaultErrorResponse(error: unknown, context: Context): Response {
+    this.recordDefaultAnswer(error, context.req.raw);
+    this.logHandledError(error, context.req.path, context.req.method);
 
     // Hono's own class first, and deliberately by `instanceof` rather than by the brand. The brand
     // reaches it only because `brandHonoHttpException()` patched the prototype from this class's
@@ -593,6 +662,21 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     });
   }
 
+  /** A validation failure no handler answered is the validator's answer; the adapter only renders it. */
+  private recordDefaultAnswer(error: unknown, request: Request): void {
+    const validator = error instanceof ValidationError ? this.failedValidations?.get(error) : undefined;
+
+    if (validator) {
+      this.answeredByValidator?.set(request, validator);
+    } else {
+      this.recordAdapterDefault();
+    }
+  }
+
+  private recordAdapterDefault(): void {
+    if (this.devtools?.enabled) this.devtools.step('adapter-default', this.name);
+  }
+
   /**
    * The status the caller will be answered with, for anything thrown.
    *
@@ -622,18 +706,18 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * `ServerLogger.debug` is optional, so fall back to `info` when an implementation does
    * not provide it.
    */
-  private logHandledError(error: Error, path: string, method: string): void {
+  private logHandledError(error: unknown, path: string, method: string): void {
     if (this.logErrors === false) return;
 
     const status = this.resolveErrorStatus(error);
     const isServerError = status >= 500;
 
     const meta = {
-      message: error.message,
+      message: error instanceof Error ? error.message : describeThrown(error),
       path,
       method,
       status,
-      ...(isServerError ? { stack: error.stack } : {}),
+      ...(isServerError && error instanceof Error ? { stack: error.stack } : {}),
     };
 
     if (isServerError) {
@@ -662,7 +746,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   private prepareHandler(handler: HonoHandler): Handler {
-    return (c: Context) => handler(this.getRequestWrapper(c));
+    return guardThrows((c: Context) => handler(this.getRequestWrapper(c)));
   }
 
   private getRequestWrapper(context: Context): HonoContextWrapper {
@@ -777,7 +861,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       return context.notFound();
     };
 
-    return async (context, next) => {
+    return guardThrows(async (context, next) => {
       const requestPath = context.req.path;
 
       if (!requestPath.includes('%')) return ownMiss(serve, context, next);
@@ -800,7 +884,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       }
 
       return ownMiss(serveStatic({ ...options, path: rewritten }), context, next);
-    };
+    });
   }
 
   /**
@@ -812,6 +896,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     baseValidator: BaseValidator<ValidationSchema | ValidationSchemaWithHook>,
     cache: boolean,
     routeLabel: string,
+    route: object,
   ): Promise<MiddlewareHandler[]> {
     if (!baseValidator) {
       return [];
@@ -827,15 +912,19 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         continue;
       }
 
+      const stepName = validatorStepName(route, key);
+
       if (!cache) {
-        validators.push(async (context, next) => {
-          const schema = await validatorHandler.handle();
-          if (!schema) {
-            this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
-            return next();
-          }
-          return this.createValidatorMiddleware(schema, key)(context, next);
-        });
+        validators.push(
+          this.observeValidator(stepName, async (context, next) => {
+            const schema = await validatorHandler.handle();
+            if (!schema) {
+              this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
+              return next();
+            }
+            return this.createValidatorMiddleware(schema, key)(context, next);
+          }),
+        );
         continue;
       }
 
@@ -845,7 +934,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
           this.logger.warn(`Validator for '${key}' returned null/undefined, skipping`);
           continue;
         }
-        validators.push(this.createValidatorMiddleware(schema, key));
+        validators.push(this.observeValidator(stepName, this.createValidatorMiddleware(schema, key)));
       } catch (error) {
         throw new Error(
           `Validator preparation failed for ${routeLabel} target '${key}': ${error instanceof Error ? error.message : String(error)}`,
@@ -855,6 +944,34 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     }
 
     return validators;
+  }
+
+  /**
+   * Core never sees a legacy `validator:` schema run, so the adapter records its step. Hono's compose
+   * hands a downstream throw to `onError` where it happened, so only the validator's own reaches `catch`.
+   */
+  private observeValidator(name: string, validator: MiddlewareHandler): MiddlewareHandler {
+    const guarded = guardThrows(validator);
+    const bus = this.devtools;
+    const failures = this.failedValidations;
+
+    if (!bus || !failures) return guarded;
+
+    const step: HonoDevtoolsStep = { kind: 'validator', name };
+
+    return async (context, next) => {
+      if (!bus.enabled) return guarded(context, next);
+
+      bus.step(step.kind, step.name);
+
+      try {
+        return await guarded(context, next);
+      } catch (error) {
+        if (error instanceof ValidationError) failures.set(error, step);
+
+        throw error;
+      }
+    };
   }
 
   private createValidatorMiddleware(
@@ -1092,16 +1209,16 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
       : [];
     const preparedMiddlewares = this.prepareMiddlewares(route.middlewares || []);
     const validators = route.validator
-      ? await this.prepareValidator(route.validator, route.validatorCache !== false, routeLabel)
+      ? await this.prepareValidator(route.validator, route.validatorCache !== false, routeLabel, route)
       : [];
     const contract = route.contextContract ?? contextClass?.[ASENA_CONTEXT_CONTRACT];
     const validateContract = contract ? prepareContextValidation(contract) : undefined;
     const contractValidator: MiddlewareHandler[] = validateContract
       ? [
-          async (context, next) => {
+          guardThrows(async (context, next) => {
             await validateContract(this.getRequestWrapper(context));
             await next();
-          },
+          }),
         ]
       : [];
 

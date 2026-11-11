@@ -74,7 +74,7 @@ const buildAdapter = (logger: ServerLogger, options: BuildOptions = {}) => {
     );
   } else if (onError === 'declines') {
     // The ordinary way to say "not mine, use the default"
-    adapter.onError((() => undefined) as any);
+    adapter.onError(() => undefined);
   } else if (onError === 'throws') {
     adapter.onError(() => {
       throw new Error('handler exploded');

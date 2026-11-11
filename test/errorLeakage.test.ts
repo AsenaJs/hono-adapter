@@ -122,7 +122,7 @@ describe('an unhandled error does not leak its message to the client', () => {
    * a 500 answered as 200 is silent, which is the class of failure this release exists to remove.
    */
   test('when the application handler declines to answer', async () => {
-    const baseUrl = await boot((adapter) => adapter.onError(() => undefined as any));
+    const baseUrl = await boot((adapter) => adapter.onError(() => undefined));
     const response = await fetch(`${baseUrl}/boom`);
     const text = await response.text();
 
@@ -143,7 +143,7 @@ describe('an unhandled error does not leak its message to the client', () => {
    * to classify the failure is the shape the documentation recommends.
    */
   test('when an async application handler declines to answer', async () => {
-    const baseUrl = await boot((adapter) => adapter.onError(async () => undefined as any));
+    const baseUrl = await boot((adapter) => adapter.onError(async () => undefined));
     const response = await fetch(`${baseUrl}/boom`);
     const text = await response.text();
 
