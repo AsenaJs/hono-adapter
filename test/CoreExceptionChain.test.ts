@@ -11,6 +11,7 @@ import { MiddlewareService } from '../lib/defaults/MiddlewareService';
 import type { Context } from '../lib/defaults/Context';
 import type { HonoAdapter } from '../lib/HonoAdapter';
 import { REQUIRE_CHAIN_ENV, chainRequired, installedCoreVersion } from './utils/coreExceptionChain';
+import { CORE_DIR_ENV } from './utils/localCore';
 
 // The devDependency is the published 0.12, which has no `@Catch`: the specifier is not a literal so
 // the file type-checks there, and the suite runs only against a core that ships the chain.
@@ -174,7 +175,8 @@ describe('the core this suite runs against', () => {
     if (!hasChain && !required) {
       console.warn(
         `[CoreExceptionChain] SKIPPED: @asenajs/asena ${coreVersion} has no exception chain. ` +
-          `Run against a 0.13 core with ${REQUIRE_CHAIN_ENV}=1 (bun run test:core-chain) to execute it.`,
+          `Run it against a built core checkout: ${CORE_DIR_ENV}=<checkout> bun run test:local-core ` +
+          `(or bun run test:core-chain once a 0.13 core is installed).`,
       );
 
       return;
