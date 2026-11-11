@@ -23,6 +23,7 @@
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:coverage": "bun test --coverage",
+    "test:core-chain": "ASENA_REQUIRE_EXCEPTION_CHAIN=1 bun test",
     "build": "bun run clean && tsc",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "clean": "rm -rf dist",

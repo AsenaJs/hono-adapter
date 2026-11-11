@@ -10,6 +10,7 @@ import { ConfigService } from '../lib/defaults/ConfigService';
 import { MiddlewareService } from '../lib/defaults/MiddlewareService';
 import type { Context } from '../lib/defaults/Context';
 import type { HonoAdapter } from '../lib/HonoAdapter';
+import { REQUIRE_CHAIN_ENV, chainRequired, installedCoreVersion } from './utils/coreExceptionChain';
 
 // The devDependency is the published 0.12, which has no `@Catch`: the specifier is not a literal so
 // the file type-checks there, and the suite runs only against a core that ships the chain.
@@ -17,6 +18,8 @@ const exceptionModule: string = '@asenajs/asena/exception';
 const exception: any = await import(exceptionModule).catch(() => undefined);
 const ExceptionHandler: (() => ClassDecorator) | undefined = (decorators as any).ExceptionHandler;
 const hasChain = exception !== undefined && ExceptionHandler !== undefined;
+const coreVersion = installedCoreVersion();
+const required = chainRequired({ coreVersion, flag: process.env[REQUIRE_CHAIN_ENV] });
 
 const DEVTOOLS_HOOK = Symbol.for('asena.devtools');
 
@@ -152,6 +155,34 @@ const defineApp = () => {
     DecliningConfig,
   };
 };
+
+describe('the core this suite runs against', () => {
+  test('a 0.13 core requires the chain, an older one does not', () => {
+    expect(chainRequired({ coreVersion: '0.12.4' })).toBe(false);
+    expect(chainRequired({ coreVersion: '0.13.0' })).toBe(true);
+    expect(chainRequired({ coreVersion: '0.13.0-next.1' })).toBe(true);
+    expect(chainRequired({ coreVersion: '1.0.0' })).toBe(true);
+  });
+
+  test(`${REQUIRE_CHAIN_ENV}=1 requires the chain on any core`, () => {
+    expect(chainRequired({ coreVersion: '0.12.0', flag: '1' })).toBe(true);
+    expect(chainRequired({ coreVersion: '0.12.0', flag: '0' })).toBe(false);
+    expect(chainRequired({ coreVersion: '0.12.0', flag: '' })).toBe(false);
+  });
+
+  test('ships the exception chain when it is required', () => {
+    if (!hasChain && !required) {
+      console.warn(
+        `[CoreExceptionChain] SKIPPED: @asenajs/asena ${coreVersion} has no exception chain. ` +
+          `Run against a 0.13 core with ${REQUIRE_CHAIN_ENV}=1 (bun run test:core-chain) to execute it.`,
+      );
+
+      return;
+    }
+
+    expect({ coreVersion, hasChain }).toEqual({ coreVersion, hasChain: true });
+  });
+});
 
 describe.skipIf(!hasChain)('core exception chain over the Hono adapter', () => {
   const app = hasChain ? defineApp() : (undefined as unknown as ReturnType<typeof defineApp>);
