@@ -141,7 +141,7 @@ describe('a thrown non-Error value', () => {
           const value = make();
 
           adapter.setPort(0);
-          adapter.onError((() => undefined) as any);
+          adapter.onError(() => undefined);
           await register(adapter, site, value);
           server = await adapter.start();
 
