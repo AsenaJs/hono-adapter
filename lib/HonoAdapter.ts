@@ -86,12 +86,11 @@ const validatorStepName = (route: object, target: string): string => {
   return typeof component === 'string' && component !== '' ? `${component}.${target}` : target;
 };
 
-export interface HonoRouteParams extends Omit<
-  RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
-  'staticServe' | 'validator'
-> {
-  staticServe?: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>['staticServe'] | null;
-  validator?: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>['validator'] | null;
+type CoreRouteParams = RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>;
+
+export interface HonoRouteParams extends Omit<CoreRouteParams, 'staticServe' | 'validator'> {
+  staticServe?: CoreRouteParams['staticServe'] | null;
+  validator?: CoreRouteParams['validator'] | null;
 }
 
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
