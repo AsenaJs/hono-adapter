@@ -850,3 +850,35 @@ describe('RateLimiterMiddleware — maxBuckets validation', () => {
     rl.destroy();
   });
 });
+
+describe('RateLimiterMiddleware — context without the adapter methods', () => {
+  it('fails loudly instead of sharing one bucket when the client address cannot be read', async () => {
+    const rl = new RateLimiterMiddleware({ capacity: 5, refillRate: 1, cleanupInterval: 0 });
+    const context = { req: { header: () => undefined }, setResponseHeader: () => {} } as any;
+
+    await expect(rl.handle(context, async () => {})).rejects.toThrow(TypeError);
+    expect(rl.getBucketState('unknown')).toBeUndefined();
+
+    rl.destroy();
+  });
+
+  it('evicts an undefined key like any other when the bucket cap is reached', async () => {
+    const rl = new RateLimiterMiddleware({
+      maxBuckets: 2,
+      cleanupInterval: 0,
+      keyGenerator: (ctx) => ctx.req.header('x-client') as string,
+    });
+    const context = (client: string | undefined) =>
+      ({ req: { header: () => client }, setResponseHeader: () => {} }) as any;
+
+    await rl.handle(context(undefined), async () => {});
+    await rl.handle(context('c1'), async () => {});
+    await rl.handle(context('c2'), async () => {});
+
+    expect(rl.getBucketState(undefined as any)).toBeUndefined();
+    expect(rl.getBucketState('c1')).toBeDefined();
+    expect(rl.getBucketState('c2')).toBeDefined();
+
+    rl.destroy();
+  });
+});

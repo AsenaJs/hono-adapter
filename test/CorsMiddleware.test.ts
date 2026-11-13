@@ -671,3 +671,15 @@ describe('CorsMiddleware — Integration', () => {
     });
   });
 });
+
+describe('CorsMiddleware — context without the adapter methods', () => {
+  it('fails loudly instead of answering without the Access-Control headers', async () => {
+    const cors = new CorsMiddleware();
+    const context = {
+      req: { header: (name: string) => (name === 'Origin' ? 'https://app.example' : undefined), method: 'GET' },
+      res: { headers: new Headers() },
+    } as any;
+
+    await expect(cors.handle(context, async () => {})).rejects.toThrow(TypeError);
+  });
+});
