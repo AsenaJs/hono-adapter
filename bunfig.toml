@@ -33,6 +33,8 @@ htmlWhitespaceSensitivity = "css"
 vueIndentScriptAndStyle = false
 endOfLine = "lf"
 embeddedLanguageFormatting = "auto"
+requirePragma = false
+insertPragma = false
 ignorePatterns = [
   ".changeset/",
   ".claude/",
