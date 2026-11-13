@@ -34,8 +34,8 @@
     "benchmark:adapter": "bun run benchmark/hono-adapter.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "bun fmt",
+    "format:check": "bun fmt --check",
     "check": "bun run lint && bun run format:check",
     "check:fix": "bun run lint:fix && bun run format",
     "changeset": "changeset",
@@ -51,7 +51,6 @@
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^9.1.2",
     "hono": "^4.13.4",
-    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.68.0",
     "zod": "^4.4.3"
