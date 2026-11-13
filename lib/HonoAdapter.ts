@@ -86,7 +86,7 @@ const validatorStepName = (route: object, target: string): string => {
   return typeof component === 'string' && component !== '' ? `${component}.${target}` : target;
 };
 
-interface HonoRouteParams extends Omit<
+export interface HonoRouteParams extends Omit<
   RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
   'staticServe' | 'validator'
 > {
