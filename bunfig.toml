@@ -40,6 +40,12 @@ experimentalTernaries = false
 experimentalOperatorPosition = "end"
 requirePragma = false
 insertPragma = false
+checkIgnorePragma = false
+insertFinalNewline = true
+sortImports = false
+jsdoc = false
+sortTailwindcss = false
+sortPackageJson = false
 ignorePatterns = [
   ".changeset/",
   ".claude/",
