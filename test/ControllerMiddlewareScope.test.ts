@@ -140,8 +140,8 @@ describe('controller middlewares scope to their own routes', () => {
 
   it('should not run the controller guard on an unmatched path under its prefix', async () => {
     // The guard is attached to the controller's routes, so a 404 is answered as a 404. Under the
-    // old `/prefix/*` pattern this path was answered 401 by a guard belonging to a route that
-    // does not exist at this spelling.
+    // old `/prefix/*` pattern every path under the prefix was answered 401 by the guard, even
+    // paths no route matches.
     expect(await status('/admin/nope')).toBe(404);
     expect(await status('/admin/nope', 'ok')).toBe(404);
   });
