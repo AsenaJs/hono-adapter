@@ -87,13 +87,11 @@ class RootRouteLevel {
   }
 }
 
-// '/admin/' is deliberately absent: this adapter normalises a trailing slash away at
-// registration, so `@Controller('/admin/')` + `@Get('/')` is reachable only as '/admin'.
-const guardedPaths = ['/secret', '/', '/empty-secret', '/admin/secret', '/admin', '/api/secret'];
+// A trailing slash on a request is the same route (see TrailingSlash.test.ts), so '/admin/' is
+// the guarded '/admin' route and runs its guard.
+const guardedPaths = ['/secret', '/', '/empty-secret', '/admin/secret', '/admin', '/admin/', '/api/secret'];
 
-// Needs core >= 0.12.0 (controller middlewares attached per route). The installed core is the
-// published one, so this runs only when node_modules/@asenajs/asena is linked to a built core.
-describe.skipIf(process.env.ASENA_LINKED_CORE !== '1')('controller middlewares scope to their own routes', () => {
+describe('controller middlewares scope to their own routes', () => {
   let app: TestApp;
 
   beforeAll(async () => {
@@ -144,8 +142,8 @@ describe.skipIf(process.env.ASENA_LINKED_CORE !== '1')('controller middlewares s
     // The guard is attached to the controller's routes, so a 404 is answered as a 404. Under the
     // old `/prefix/*` pattern this path was answered 401 by a guard belonging to a route that
     // does not exist at this spelling.
-    expect(await status('/admin/')).toBe(404);
-    expect(await status('/admin/', 'ok')).toBe(404);
+    expect(await status('/admin/nope')).toBe(404);
+    expect(await status('/admin/nope', 'ok')).toBe(404);
   });
 
   it('should still run a route-level middleware on a root controller', async () => {
