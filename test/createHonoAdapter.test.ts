@@ -1,8 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import type { Server } from 'bun';
+import type { ServerLogger } from '@asenajs/asena/logger';
+import { createDeepMock } from '@asenajs/asena/test';
 import { createHonoAdapter } from '../lib/utils/createHonoAdapter';
 import { HonoAdapter } from '../lib/HonoAdapter';
 import { createMockLogger, registerRoute } from './utils/testHelpers';
+
+class DelegatingLogger implements ServerLogger {
+  public constructor(private readonly logger: ServerLogger = createMockLogger()) {}
+
+  public info(message: string, meta?: unknown) {
+    this.logger.info(message, meta);
+  }
+
+  public warn(message: string, meta?: unknown) {
+    this.logger.warn(message, meta);
+  }
+
+  public error(message: string, meta?: unknown) {
+    this.logger.error(message, meta);
+  }
+
+  public profile(id: string) {
+    this.logger.profile(id);
+  }
+}
+
+const getTrapLogger = (): ServerLogger => {
+  const methods = createMockLogger();
+
+  return new Proxy({} as ServerLogger, { get: (_target, key) => Reflect.get(methods, key) });
+};
 
 describe('createHonoAdapter', () => {
   it('should create adapter with ServerLogger argument', () => {
@@ -36,6 +64,33 @@ describe('createHonoAdapter', () => {
 
     expect(adapter).toBeInstanceOf(HonoAdapter);
     expect(adapter.name).toBe('HonoAdapter');
+  });
+
+  it.each<[string, () => ServerLogger]>([
+    ['a plain object', createMockLogger],
+    ['a class instance with its own logger field', () => new DelegatingLogger()],
+    ['a Proxy that answers from a get trap only', getTrapLogger],
+    ['a deep mock', () => createDeepMock()],
+  ])('uses a logger passed on its own, with the default options (%s)', (_label, createLogger) => {
+    const logger = createLogger();
+    const [adapter, returnedLogger] = createHonoAdapter(logger);
+
+    expect(returnedLogger).toBe(logger);
+    expect(adapter['logger']).toBe(logger);
+    expect(adapter.getWebsocketAdapter()?.logger).toBe(logger);
+    expect(adapter['_strict']).toBe(false);
+    expect(adapter['logErrors']).toBe(true);
+  });
+
+  it('takes the logger and the options from an options object', () => {
+    const logger = createMockLogger();
+    const [adapter, returnedLogger] = createHonoAdapter({ logger, strict: true, logErrors: false });
+
+    expect(returnedLogger).toBe(logger);
+    expect(adapter['logger']).toBe(logger);
+    expect(adapter.getWebsocketAdapter()?.logger).toBe(logger);
+    expect(adapter['_strict']).toBe(true);
+    expect(adapter['logErrors']).toBe(false);
   });
 });
 

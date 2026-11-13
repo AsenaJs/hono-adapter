@@ -20,11 +20,13 @@ const createConsoleLogger = (): ServerLogger => {
   };
 };
 
+const isServerLogger = (value: ServerLogger | Partial<HonoAdapterOptions>): value is ServerLogger =>
+  typeof (value as Partial<ServerLogger>).info === 'function';
+
 export const createHonoAdapter = (
   loggerOrOptions: ServerLogger | Partial<HonoAdapterOptions> = {},
 ): [HonoAdapter, ServerLogger] => {
-  const options =
-    'logger' in loggerOrOptions || !('info' in loggerOrOptions) ? loggerOrOptions : { logger: loggerOrOptions };
+  const options = isServerLogger(loggerOrOptions) ? { logger: loggerOrOptions } : loggerOrOptions;
   const logger = options.logger ?? createConsoleLogger();
 
   return [new HonoAdapter({ ...options, logger }), logger];
