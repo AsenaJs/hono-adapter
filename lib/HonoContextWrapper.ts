@@ -278,7 +278,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   }
 
   public getParam(s: string): string {
-    return this._context.req.param(s)!;
+    return this._context.req.param(s) ?? '';
   }
 
   /**

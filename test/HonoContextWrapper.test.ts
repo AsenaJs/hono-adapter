@@ -257,6 +257,21 @@ describe('HonoContextWrapper', () => {
       const res = await fetch(`${baseUrl}/users/42`);
       expect((await res.json()).userId).toBe('42');
     });
+
+    it("getParam() returns '' for a name the route does not declare", async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/users/:id',
+        handler: (ctx) => ctx.send({ id: ctx.getParam('id'), missing: ctx.getParam('missing') }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users/42`);
+      expect(await res.json()).toEqual({ id: '42', missing: '' });
+    });
   });
 
   // ─── Request Properties ───────────────────────────────────────────
