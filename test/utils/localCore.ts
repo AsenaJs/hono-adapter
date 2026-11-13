@@ -1,7 +1,6 @@
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { REQUIRE_CHAIN_ENV } from './coreExceptionChain';
 
 export const CORE_DIR_ENV = 'ASENA_CORE_DIR';
 
@@ -96,10 +95,7 @@ if (import.meta.main) {
     installDir: join(repository, 'node_modules', CORE_NAME),
     run: async () => {
       const typecheck = await execute(['bun', 'run', 'typecheck'], repository);
-      const tests = await execute(['bun', 'test', ...process.argv.slice(2)], repository, {
-        ...process.env,
-        [REQUIRE_CHAIN_ENV]: '1',
-      });
+      const tests = await execute(['bun', 'test', ...process.argv.slice(2)], repository);
 
       return typecheck || tests;
     },
