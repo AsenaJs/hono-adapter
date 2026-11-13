@@ -911,7 +911,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const validators: MiddlewareHandler[] = [];
 
     for (const key of VALIDATOR_METHODS) {
-      const validatorHandler = baseValidator[key as keyof BaseValidator<ValidationSchema | ValidationSchemaWithHook>]!;
+      const validatorHandler = baseValidator[key as keyof typeof baseValidator];
 
       // Skip if not a valid validator
       if (!validatorHandler || typeof validatorHandler.handle !== 'function') {
