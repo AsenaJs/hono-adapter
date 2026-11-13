@@ -183,23 +183,23 @@ export class CorsMiddleware extends MiddlewareService {
     }
 
     if (allowedOrigin) {
-      context.setResponseHeader('Access-Control-Allow-Origin', allowedOrigin);
+      context.setResponseHeader?.('Access-Control-Allow-Origin', allowedOrigin);
 
       if (this.credentials) {
-        context.setResponseHeader('Access-Control-Allow-Credentials', 'true');
+        context.setResponseHeader?.('Access-Control-Allow-Credentials', 'true');
       }
 
       if (this.exposedHeaders) {
-        context.setResponseHeader('Access-Control-Expose-Headers', this.exposedHeaders);
+        context.setResponseHeader?.('Access-Control-Expose-Headers', this.exposedHeaders);
       }
     }
 
     // Handle preflight OPTIONS request
     if (context.req.method === 'OPTIONS') {
       if (allowedOrigin) {
-        context.setResponseHeader('Access-Control-Allow-Methods', this.methods);
-        context.setResponseHeader('Access-Control-Allow-Headers', this.allowedHeaders);
-        context.setResponseHeader('Access-Control-Max-Age', this.maxAge);
+        context.setResponseHeader?.('Access-Control-Allow-Methods', this.methods);
+        context.setResponseHeader?.('Access-Control-Allow-Headers', this.allowedHeaders);
+        context.setResponseHeader?.('Access-Control-Max-Age', this.maxAge);
       }
 
       // Accumulated headers, not a fresh object: earlier middlewares' headers survive the 204.

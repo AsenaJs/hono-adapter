@@ -106,7 +106,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/boom`);
+      const response = await fetch(`http://localhost:${server!.port}/boom`);
 
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({ error: 'Internal Server Error' });
@@ -123,7 +123,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger).start()) as any;
 
-      await fetch(`http://localhost:${server.port}/denied`);
+      await fetch(`http://localhost:${server!.port}/denied`);
 
       const entry = entries.find((e) => e.message === 'Request rejected:');
 
@@ -141,7 +141,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger).start()) as any;
 
-      await fetch(`http://localhost:${server.port}/denied`);
+      await fetch(`http://localhost:${server!.port}/denied`);
 
       const entry = entries.find((e) => e.message === 'Request rejected:');
 
@@ -153,8 +153,8 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { logErrors: false }).start()) as any;
 
-      await fetch(`http://localhost:${server.port}/boom`);
-      await fetch(`http://localhost:${server.port}/denied`);
+      await fetch(`http://localhost:${server!.port}/boom`);
+      await fetch(`http://localhost:${server!.port}/denied`);
 
       expect(entries.some((e) => e.message === 'Application error occurred:')).toBe(false);
       expect(entries.some((e) => e.message === 'Request rejected:')).toBe(false);
@@ -167,7 +167,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { onError: 'answers' }).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/boom`);
+      const response = await fetch(`http://localhost:${server!.port}/boom`);
 
       expect(response.status).toBe(500);
       // The application's own body, so the application is the one that logged it - with whatever
@@ -182,7 +182,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { onError: 'answers' }).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/denied`);
+      const response = await fetch(`http://localhost:${server!.port}/denied`);
 
       expect(response.status).toBe(401);
 
@@ -197,7 +197,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { onError: 'declines' }).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/boom`);
+      const response = await fetch(`http://localhost:${server!.port}/boom`);
 
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({ error: 'Internal Server Error' });
@@ -215,7 +215,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { onError: 'throws' }).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/boom`);
+      const response = await fetch(`http://localhost:${server!.port}/boom`);
 
       expect(response.status).toBe(500);
 
@@ -233,7 +233,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/nope/deep?x=1`, { method: 'POST' });
+      const response = await fetch(`http://localhost:${server!.port}/nope/deep?x=1`, { method: 'POST' });
 
       expect(response.status).toBe(404);
       expect(await response.json()).toEqual({ error: 'Not Found' });
@@ -251,7 +251,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { onNotFound: 'answers' }).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/nope`);
+      const response = await fetch(`http://localhost:${server!.port}/nope`);
 
       expect(response.status).toBe(404);
       expect(await response.json()).toEqual({ mine: true });
@@ -264,7 +264,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { onNotFound: 'throws' }).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/nope`);
+      const response = await fetch(`http://localhost:${server!.port}/nope`);
 
       expect(response.status).toBe(404);
       expect(await response.json()).toEqual({ error: 'Not Found' });
@@ -278,7 +278,7 @@ describe('HonoAdapter error logging', () => {
 
       server = (await buildAdapter(logger, { logErrors: false }).start()) as any;
 
-      const response = await fetch(`http://localhost:${server.port}/nope`);
+      const response = await fetch(`http://localhost:${server!.port}/nope`);
 
       expect(response.status).toBe(404);
       expect(entries.some((e) => e.message === 'Route not found:')).toBe(false);

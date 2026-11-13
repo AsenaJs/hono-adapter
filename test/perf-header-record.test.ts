@@ -191,7 +191,7 @@ describe('validator without a hook', () => {
       validator: {
         json: { handle: () => z.object({ name: z.string().min(3) }) },
       } as never,
-      handler: async (ctx) => ctx.send(await ctx.getBody(), 200),
+      handler: async (ctx: HonoContextWrapper) => ctx.send(await ctx.getBody(), 200),
       staticServe: undefined,
       controllerName: 'V',
       controllerBasePath: '/',

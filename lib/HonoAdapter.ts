@@ -19,7 +19,6 @@ import {
   prepareContextValidation,
   type RouteParams,
   VALIDATOR_METHODS,
-  type ValidatorHandler,
 } from '@asenajs/asena/adapter';
 import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asenajs/asena/server/config';
 import { shouldApplyMiddleware } from '@asenajs/asena/utils';
@@ -87,6 +86,14 @@ const validatorStepName = (route: object, target: string): string => {
   return typeof component === 'string' && component !== '' ? `${component}.${target}` : target;
 };
 
+interface HonoRouteParams extends Omit<
+  RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
+  'staticServe' | 'validator'
+> {
+  staticServe?: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>['staticServe'] | null;
+  validator?: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>['validator'] | null;
+}
+
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
 
@@ -96,7 +103,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   private readonly logErrors: boolean = true;
 
-  private server: Server<WebSocketData>;
+  private server!: Server<WebSocketData>;
 
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
 
@@ -167,7 +174,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   // Deferred route registration
-  private routeQueue: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[] = [];
+  private routeQueue: HonoRouteParams[] = [];
 
   /**
    * WebSocket route queue for deferred registration
@@ -337,7 +344,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     this.globalMiddlewares.push({ middleware, config });
   }
 
-  public async registerRoute(params: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>) {
+  public async registerRoute(params: HonoRouteParams) {
     // Queue the route for deferred registration
     this.routeQueue.push(params);
   }
@@ -905,7 +912,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const validators: MiddlewareHandler[] = [];
 
     for (const key of VALIDATOR_METHODS) {
-      const validatorHandler = baseValidator[key] as ValidatorHandler<ValidationSchema | ValidationSchemaWithHook>;
+      const validatorHandler = baseValidator[key as keyof BaseValidator<ValidationSchema | ValidationSchemaWithHook>]!;
 
       // Skip if not a valid validator
       if (!validatorHandler || typeof validatorHandler.handle !== 'function') {
@@ -1190,9 +1197,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Route middlewares run before the route's validator - global middlewares → route
    * middlewares → validator → handler - matching ergenecore.
    */
-  private async registerRouteDirect(
-    route: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
-  ): Promise<void> {
+  private async registerRouteDirect(route: HonoRouteParams): Promise<void> {
     const routeLabel = `${route.method.toUpperCase()} ${route.path}`;
     const contextClass = route.contextClass;
     assertRouteContract(route, contextClass, routeLabel);
@@ -1291,7 +1296,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         });
       }
 
-      groups.get(controllerName).routes.push({
+      groups.get(controllerName)!.routes.push({
         method: route.method.toUpperCase(),
         path: route.path,
       });
@@ -1332,7 +1337,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         });
       }
 
-      groups.get(controllerName).routes.push({
+      groups.get(controllerName)!.routes.push({
         path: wsRoute.path,
       });
     }
@@ -1370,7 +1375,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const [controllerName, wsGroup] of wsGroups) {
       if (httpGroups.has(controllerName)) {
         // Add WebSocket routes to existing controller group
-        const httpGroup = httpGroups.get(controllerName);
+        const httpGroup = httpGroups.get(controllerName)!;
 
         for (const wsRoute of wsGroup.routes) {
           httpGroup.routes.push({
@@ -1461,7 +1466,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
         });
       }
 
-      groups.get(route.controllerName).routes.push({ path: route.path });
+      groups.get(route.controllerName)!.routes.push({ path: route.path });
     }
 
     return groups;

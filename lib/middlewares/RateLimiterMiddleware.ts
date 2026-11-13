@@ -417,7 +417,11 @@ export class RateLimiterMiddleware extends MiddlewareService {
       };
 
       if (this.buckets.size >= this.maxBuckets) {
-        this.buckets.delete(this.buckets.keys().next().value);
+        const oldest = this.buckets.keys().next().value;
+
+        if (oldest !== undefined) {
+          this.buckets.delete(oldest);
+        }
       }
     }
 
@@ -455,9 +459,9 @@ export class RateLimiterMiddleware extends MiddlewareService {
     bucket.tokens -= requestCost;
 
     // Set rate limit headers via AsenaContext abstraction
-    context.setResponseHeader('X-RateLimit-Limit', String(Math.floor(this.refillRate * 60)));
-    context.setResponseHeader('X-RateLimit-Remaining', String(Math.floor(bucket.tokens)));
-    context.setResponseHeader('X-RateLimit-Reset', String(Math.floor(bucket.lastRefill / 1000 + 60)));
+    context.setResponseHeader?.('X-RateLimit-Limit', String(Math.floor(this.refillRate * 60)));
+    context.setResponseHeader?.('X-RateLimit-Remaining', String(Math.floor(bucket.tokens)));
+    context.setResponseHeader?.('X-RateLimit-Reset', String(Math.floor(bucket.lastRefill / 1000 + 60)));
 
     // Continue to next middleware/handler
     return await next();
@@ -524,7 +528,7 @@ export class RateLimiterMiddleware extends MiddlewareService {
    * @returns Client identifier
    */
   private resolveClientKey(context: Context): string {
-    const peer = context.getRequestIp();
+    const peer = context.getRequestIp?.() ?? null;
 
     if (!this.trusts(peer)) {
       return peer ?? 'unknown';
@@ -544,7 +548,7 @@ export class RateLimiterMiddleware extends MiddlewareService {
       }
     }
 
-    return hops.at(-1);
+    return hops[hops.length - 1];
   }
 
   /**

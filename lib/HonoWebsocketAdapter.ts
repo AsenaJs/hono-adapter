@@ -252,7 +252,7 @@ export class HonoWebsocketAdapter extends AsenaWebsocketAdapter {
           this.activeConnections.set(namespace, new Set());
         }
 
-        this.activeConnections.get(namespace).add(ws.data.id);
+        this.activeConnections.get(namespace)!.add(ws.data.id);
 
         // Start heartbeat if enabled (adapter strategy only)
         if (heartbeatInterval) {

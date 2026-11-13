@@ -6,7 +6,7 @@ export const createHonoAdapter = (
   loggerOrOptions?: ServerLogger | Partial<HonoAdapterOptions>,
 ): [HonoAdapter, ServerLogger] => {
   if (loggerOrOptions && typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions) {
-    const logger = loggerOrOptions.logger;
+    const logger = loggerOrOptions.logger!;
 
     return [new HonoAdapter(loggerOrOptions as HonoAdapterOptions), logger];
   }

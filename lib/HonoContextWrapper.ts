@@ -263,7 +263,9 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
 
       return req.parseBody() as Promise<T>;
     } catch (error) {
-      return Promise.reject(error as Error);
+      const reason = error as Error;
+
+      return Promise.reject(reason);
     }
   }
 
@@ -276,7 +278,7 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
   }
 
   public getParam(s: string): string {
-    return this._context.req.param(s);
+    return this._context.req.param(s)!;
   }
 
   /**
@@ -321,7 +323,9 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
         },
       );
     } catch (error) {
-      return Promise.reject(error as Error);
+      const reason = error as Error;
+
+      return Promise.reject(reason);
     }
   }
 
@@ -329,7 +333,9 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
     try {
       return Promise.resolve(findQueryParam((this._url ??= this._context.req.url), query));
     } catch (error) {
-      return Promise.reject(error as Error);
+      const reason = error as Error;
+
+      return Promise.reject(reason);
     }
   }
 
@@ -337,7 +343,9 @@ export class HonoContextWrapper<I extends InputMap = Record<never, never>> imple
     try {
       return Promise.resolve(this._context.req.queries(query) ?? []);
     } catch (error) {
-      return Promise.reject(error as Error);
+      const reason = error as Error;
+
+      return Promise.reject(reason);
     }
   }
 

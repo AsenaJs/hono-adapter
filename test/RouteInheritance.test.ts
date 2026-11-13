@@ -36,7 +36,7 @@ class HonoStampMiddleware extends MiddlewareService {
 
 abstract class HonoHealthControllerBase {
   @Inject(HonoProbeService)
-  protected probeService: HonoProbeService;
+  protected probeService!: HonoProbeService;
 
   @Get('/live')
   public live(context: Context) {

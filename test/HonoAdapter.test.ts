@@ -801,7 +801,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/validated',
         middlewares: [],
-        handler: async (ctx) => {
+        handler: async (ctx: HonoAdapterContext) => {
           const body = await ctx.getBody();
           return ctx.send(body);
         },
@@ -835,7 +835,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/validated',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: {
           json: { handle: () => schema, override: false },
@@ -867,7 +867,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.GET,
         path: '/search',
         middlewares: [],
-        handler: async (ctx) => {
+        handler: async (ctx: HonoAdapterContext) => {
           const page = await ctx.getQuery('page');
           return ctx.send({ page });
         },
@@ -898,7 +898,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.GET,
         path: '/protected',
         middlewares: [],
-        handler: (ctx) => ctx.send({ ok: true }),
+        handler: (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: {
           header: { handle: () => schema, override: false },
@@ -931,7 +931,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/multi-validated',
         middlewares: [],
-        handler: async (ctx) => {
+        handler: async (ctx: HonoAdapterContext) => {
           const body = await ctx.getBody();
           const format = await ctx.getQuery('format');
           return ctx.send({ body, format });
@@ -970,7 +970,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.GET,
         path: '/no-validator',
         middlewares: [],
-        handler: (ctx) => ctx.send({ ok: true }),
+        handler: (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: null,
       } as any);
@@ -989,7 +989,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.GET,
         path: '/null-schema',
         middlewares: [],
-        handler: (ctx) => ctx.send({ ok: true }),
+        handler: (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: {
           json: { handle: () => null, override: false },
@@ -1014,7 +1014,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/with-hook',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: {
           json: {
@@ -1069,7 +1069,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/mapped',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: { json: { handle: () => schema, override: false } },
       } as any);
@@ -1108,7 +1108,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/unmapped',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: { json: { handle: () => schema, override: false } },
       } as any);
@@ -1140,7 +1140,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/unlogged',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: { json: { handle: () => schema, override: false } },
       } as any);
@@ -1181,7 +1181,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/declined',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: { json: { handle: () => schema, override: false } },
       } as any);
@@ -1214,7 +1214,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/logging-hook',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: {
           json: {
@@ -1253,7 +1253,7 @@ describe('HonoAdapter', () => {
         method: HttpMethod.POST,
         path: '/hook-on-success',
         middlewares: [],
-        handler: async (ctx) => ctx.send({ ok: true }),
+        handler: async (ctx: HonoAdapterContext) => ctx.send({ ok: true }),
         staticServe: null,
         validator: {
           json: { handle: () => ({ schema, hook: () => void hookRuns++ }), override: false },
