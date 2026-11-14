@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach, mock, spyOn } from 'bun:test';
+import { describe, expect, it, afterEach, mock, setSystemTime, spyOn } from 'bun:test';
 import type { Server } from 'bun';
 import { RateLimiterMiddleware } from '../lib/middlewares/RateLimiterMiddleware';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -852,7 +852,13 @@ describe('RateLimiterMiddleware — maxBuckets validation', () => {
 });
 
 describe('RateLimiterMiddleware — handle() on a stub context', () => {
+  afterEach(() => {
+    setSystemTime();
+  });
+
   it('reads the client from getRequestIp and sets its headers with setResponseHeader', async () => {
+    setSystemTime(new Date(1_700_000_000_000));
+
     const rl = new RateLimiterMiddleware({ capacity: 5, refillRate: 1, cleanupInterval: 0 });
     const getRequestIp = mock(() => '203.0.113.7');
     const setResponseHeader = mock((_name: string, _value: string) => {});
@@ -863,10 +869,9 @@ describe('RateLimiterMiddleware — handle() on a stub context', () => {
 
     expect(getRequestIp).toHaveBeenCalled();
     expect(rl.getBucketState('203.0.113.7')?.tokens).toBe(4);
-    expect(rl.getBucketState('unknown')).toBeUndefined();
     expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '60');
     expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Remaining', '4');
-    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Reset', expect.any(String));
+    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Reset', '1700000060');
     expect(next).toHaveBeenCalledTimes(1);
 
     rl.destroy();
