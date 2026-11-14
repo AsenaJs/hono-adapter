@@ -458,7 +458,7 @@ export class RateLimiterMiddleware extends MiddlewareService {
     // Consume tokens
     bucket.tokens -= requestCost;
 
-    // The adapter's Context always implements these; core declares them optional for other adapters.
+    // Core declares setResponseHeader optional; this adapter's context always implements it.
     context.setResponseHeader!('X-RateLimit-Limit', String(Math.floor(this.refillRate * 60)));
     context.setResponseHeader!('X-RateLimit-Remaining', String(Math.floor(bucket.tokens)));
     context.setResponseHeader!('X-RateLimit-Reset', String(Math.floor(bucket.lastRefill / 1000 + 60)));
@@ -528,6 +528,7 @@ export class RateLimiterMiddleware extends MiddlewareService {
    * @returns Client identifier
    */
   private resolveClientKey(context: Context): string {
+    // Core declares getRequestIp optional; this adapter's context always implements it.
     const peer = context.getRequestIp!();
 
     if (!this.trusts(peer)) {

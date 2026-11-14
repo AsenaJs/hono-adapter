@@ -182,7 +182,7 @@ export class CorsMiddleware extends MiddlewareService {
       this.appendVaryOrigin(context);
     }
 
-    // The adapter's Context always implements setResponseHeader; core declares it optional for other adapters.
+    // Core declares setResponseHeader optional; this adapter's context always implements it.
     if (allowedOrigin) {
       context.setResponseHeader!('Access-Control-Allow-Origin', allowedOrigin);
 
