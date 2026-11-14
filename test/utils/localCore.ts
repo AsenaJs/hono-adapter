@@ -17,8 +17,8 @@ const restorePublishedCopy = (installDir: string) => {
   }
 };
 
-const execute = async (command: string[], cwd: string, env?: Record<string, string | undefined>): Promise<number> =>
-  Bun.spawn(command, { cwd, env: env ?? process.env, stdio: ['inherit', 'inherit', 'inherit'] }).exited;
+const execute = async (command: string[], cwd: string): Promise<number> =>
+  Bun.spawn(command, { cwd, env: process.env, stdio: ['inherit', 'inherit', 'inherit'] }).exited;
 
 const pack = async (coreDir: string, scratch: string): Promise<string> => {
   const manifest = JSON.parse(readFileSync(join(coreDir, 'package.json'), 'utf8'));
