@@ -1864,6 +1864,26 @@ describe('HonoAdapter', () => {
       expect(healthRes.status).toBe(200);
     });
 
+    it('answers a WebSocket route like a failed upgrade when start() failed before the server existed', async () => {
+      const { adapter, logger } = createTestAdapter();
+
+      adapter.registerWebsocketRoute({
+        path: 'chat',
+        middlewares: [],
+        websocketService: null,
+        controllerName: 'ChatController',
+      } as any);
+      await registerRoute(adapter, { path: '/dashboard' });
+      adapter.registerHTMLRoute('/dashboard', new Response('<html></html>'), 'Pages', '/');
+
+      await expect(adapter.start()).rejects.toThrow(/HTML route collision/);
+
+      const res = await adapter.app.request('/chat', { headers: { upgrade: 'websocket' } });
+
+      expect(res.status).toBe(404);
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
     it('should normalize websocket path by stripping trailing slash', async () => {
       const { adapter } = createTestAdapter();
 

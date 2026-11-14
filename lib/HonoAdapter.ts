@@ -103,7 +103,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   private readonly logErrors: boolean = true;
 
-  private server!: Server<WebSocketData>;
+  private server?: Server<WebSocketData>;
 
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
 
@@ -1167,7 +1167,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
       const dataPath = normalizedWsPath.startsWith('/') ? normalizedWsPath.slice(1) : normalizedWsPath;
       const data: WebSocketData = { values: websocketData, id, path: dataPath };
-      const upgradeResult = this.server.upgrade(c.req.raw, { data });
+      const upgradeResult = this.server?.upgrade(c.req.raw, { data });
 
       if (upgradeResult) {
         return new Response(null);
