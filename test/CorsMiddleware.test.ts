@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from 'bun:test';
+import { describe, expect, it, afterEach, mock } from 'bun:test';
 import type { Server } from 'bun';
 import { CorsMiddleware } from '../lib/defaults';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -672,14 +672,30 @@ describe('CorsMiddleware — Integration', () => {
   });
 });
 
-describe('CorsMiddleware — context without the adapter methods', () => {
-  it('fails loudly instead of answering without the Access-Control headers', async () => {
-    const cors = new CorsMiddleware();
+describe('CorsMiddleware — handle() on a stub context', () => {
+  it('writes every Access-Control header through setResponseHeader', async () => {
+    const cors = new CorsMiddleware({ origin: 'https://app.example', credentials: true, exposedHeaders: ['X-Total'] });
+    const setResponseHeader = mock((_name: string, _value: string) => {});
+    const next = mock(async () => {});
     const context = {
-      req: { header: (name: string) => (name === 'Origin' ? 'https://app.example' : undefined), method: 'GET' },
+      req: { header: (name: string) => (name === 'Origin' ? 'https://app.example' : undefined), method: 'OPTIONS' },
       res: { headers: new Headers() },
+      setResponseHeader,
+      appendResponseHeader: () => {},
     } as any;
 
-    await expect(cors.handle(context, async () => {})).rejects.toThrow(TypeError);
+    const response = await cors.handle(context, next);
+
+    expect(response.status).toBe(204);
+    expect(next).not.toHaveBeenCalled();
+    expect(setResponseHeader).toHaveBeenCalledTimes(6);
+    expect(Object.fromEntries(setResponseHeader.mock.calls)).toEqual({
+      'Access-Control-Allow-Origin': 'https://app.example',
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Expose-Headers': 'X-Total',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+    });
   });
 });

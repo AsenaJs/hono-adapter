@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach, spyOn } from 'bun:test';
+import { describe, expect, it, afterEach, mock, spyOn } from 'bun:test';
 import type { Server } from 'bun';
 import { RateLimiterMiddleware } from '../lib/middlewares/RateLimiterMiddleware';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -851,13 +851,23 @@ describe('RateLimiterMiddleware — maxBuckets validation', () => {
   });
 });
 
-describe('RateLimiterMiddleware — context without the adapter methods', () => {
-  it('fails loudly instead of sharing one bucket when the client address cannot be read', async () => {
+describe('RateLimiterMiddleware — handle() on a stub context', () => {
+  it('reads the client from getRequestIp and sets its headers with setResponseHeader', async () => {
     const rl = new RateLimiterMiddleware({ capacity: 5, refillRate: 1, cleanupInterval: 0 });
-    const context = { req: { header: () => undefined }, setResponseHeader: () => {} } as any;
+    const getRequestIp = mock(() => '203.0.113.7');
+    const setResponseHeader = mock((_name: string, _value: string) => {});
+    const next = mock(async () => {});
+    const context = { req: { header: () => undefined }, getRequestIp, setResponseHeader } as any;
 
-    await expect(rl.handle(context, async () => {})).rejects.toThrow(TypeError);
+    await rl.handle(context, next);
+
+    expect(getRequestIp).toHaveBeenCalled();
+    expect(rl.getBucketState('203.0.113.7')?.tokens).toBe(4);
     expect(rl.getBucketState('unknown')).toBeUndefined();
+    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '60');
+    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Remaining', '4');
+    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Reset', expect.any(String));
+    expect(next).toHaveBeenCalledTimes(1);
 
     rl.destroy();
   });
