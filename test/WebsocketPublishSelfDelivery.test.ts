@@ -112,7 +112,7 @@ describe('socket.publish() self-delivery does not depend on the transport', () =
 
     server = s;
 
-    return { adapter, wsAdapter, port: s.port };
+    return { adapter, wsAdapter, port: s.port! };
   }
 
   it('excludes the publishing socket with no transport configured', async () => {

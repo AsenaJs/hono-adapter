@@ -1,6 +1,7 @@
 import { mock } from 'bun:test';
 import { HonoAdapter } from '../../lib/HonoAdapter';
 import { HonoWebsocketAdapter } from '../../lib/HonoWebsocketAdapter';
+import type { HonoContextWrapper } from '../../lib/HonoContextWrapper';
 import type { ServerLogger } from '@asenajs/asena/logger';
 import type { BaseMiddleware } from '@asenajs/asena/adapter';
 import type { Context as HonoAdapterContext } from '../../lib/defaults';
@@ -44,7 +45,7 @@ export function createTestAdapter(opts?: Partial<HonoAdapterOptions>) {
  */
 export async function startTestServer(adapter: HonoAdapter) {
   const server = await adapter.start();
-  const port = server.port;
+  const port = server.port!;
   const baseUrl = `http://localhost:${port}`;
 
   return { server, port, baseUrl };
@@ -58,7 +59,7 @@ export async function registerRoute(
   overrides: {
     method?: HttpMethod;
     path?: string;
-    handler?: (ctx: HonoAdapterContext) => any;
+    handler?: (ctx: HonoContextWrapper) => any;
     middlewares?: BaseMiddleware<HonoAdapterContext>[];
     staticServe?: any;
     validator?: any;
@@ -69,7 +70,7 @@ export async function registerRoute(
   await adapter.registerRoute({
     method: overrides.method ?? HttpMethod.GET,
     path: overrides.path ?? '/test',
-    handler: overrides.handler ?? ((ctx: HonoAdapterContext) => ctx.send({ ok: true })),
+    handler: overrides.handler ?? ((ctx: HonoContextWrapper) => ctx.send({ ok: true })),
     middlewares: overrides.middlewares ?? [],
     staticServe: overrides.staticServe ?? null,
     validator: overrides.validator ?? null,

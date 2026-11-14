@@ -19,7 +19,6 @@ import {
   prepareContextValidation,
   type RouteParams,
   VALIDATOR_METHODS,
-  type ValidatorHandler,
 } from '@asenajs/asena/adapter';
 import type { GlobalMiddlewareConfig, GlobalMiddlewareRouteConfig } from '@asenajs/asena/server/config';
 import { shouldApplyMiddleware } from '@asenajs/asena/utils';
@@ -39,6 +38,7 @@ import type { ZodError, ZodType } from 'zod';
 import { brandHonoHttpException, ValidationError, warnOnNestedHono } from './errors';
 import { middlewareParser } from './utils/middlewareParser';
 import { describeThrown, guardThrows, unwrapThrown } from './utils/nonErrorThrow';
+import { isServerLogger } from './utils/isServerLogger';
 import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -87,6 +87,13 @@ const validatorStepName = (route: object, target: string): string => {
   return typeof component === 'string' && component !== '' ? `${component}.${target}` : target;
 };
 
+type CoreRouteParams = RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>;
+
+export interface HonoRouteParams extends Omit<CoreRouteParams, 'staticServe' | 'validator'> {
+  staticServe?: CoreRouteParams['staticServe'] | null;
+  validator?: CoreRouteParams['validator'] | null;
+}
+
 export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSchema> {
   public name = 'HonoAdapter';
 
@@ -96,7 +103,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
   private readonly logErrors: boolean = true;
 
-  private server: Server<WebSocketData>;
+  private server?: Server<WebSocketData>;
 
   private options: AsenaServeOptions = {} satisfies AsenaServeOptions;
 
@@ -167,7 +174,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
   }
 
   // Deferred route registration
-  private routeQueue: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>[] = [];
+  private routeQueue: HonoRouteParams[] = [];
 
   /**
    * WebSocket route queue for deferred registration
@@ -221,33 +228,22 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     websocketAdapter?: HonoWebsocketAdapter,
     app?: Hono<any, any, any>,
   ) {
-    let logger: ServerLogger;
-    let wsAdapter: HonoWebsocketAdapter;
-    let honoApp: Hono<any, any, any> | undefined;
+    const options: HonoAdapterOptions = isServerLogger(loggerOrOptions)
+      ? { logger: loggerOrOptions, websocketAdapter, app }
+      : loggerOrOptions;
+    const logger = options.logger;
 
-    if (typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions) {
-      logger = loggerOrOptions.logger;
-      wsAdapter = loggerOrOptions.websocketAdapter ?? new HonoWebsocketAdapter(logger);
-      honoApp = loggerOrOptions.app;
-    } else {
-      logger = loggerOrOptions;
-      wsAdapter = websocketAdapter ?? new HonoWebsocketAdapter(logger);
-      honoApp = app;
-    }
-
-    super(logger, wsAdapter);
+    super(logger, options.websocketAdapter ?? new HonoWebsocketAdapter(logger));
 
     if (!this.websocketAdapter.logger && logger) {
       this.websocketAdapter.logger = this.logger;
     }
 
-    const isOptionsObject = typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions;
+    this._strict = options.strict ?? false;
+    this.logErrors = options.logErrors ?? true;
 
-    this._strict = isOptionsObject ? (loggerOrOptions.strict ?? false) : false;
-    this.logErrors = isOptionsObject ? (loggerOrOptions.logErrors ?? true) : true;
-
-    if (honoApp) {
-      this.app = honoApp;
+    if (options.app) {
+      this.app = options.app;
     } else {
       this.app = new Hono({ strict: this._strict });
     }
@@ -337,7 +333,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     this.globalMiddlewares.push({ middleware, config });
   }
 
-  public async registerRoute(params: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>) {
+  public async registerRoute(params: HonoRouteParams) {
     // Queue the route for deferred registration
     this.routeQueue.push(params);
   }
@@ -905,7 +901,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const validators: MiddlewareHandler[] = [];
 
     for (const key of VALIDATOR_METHODS) {
-      const validatorHandler = baseValidator[key] as ValidatorHandler<ValidationSchema | ValidationSchemaWithHook>;
+      const validatorHandler = baseValidator[key as keyof typeof baseValidator];
 
       // Skip if not a valid validator
       if (!validatorHandler || typeof validatorHandler.handle !== 'function') {
@@ -1171,7 +1167,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
       const dataPath = normalizedWsPath.startsWith('/') ? normalizedWsPath.slice(1) : normalizedWsPath;
       const data: WebSocketData = { values: websocketData, id, path: dataPath };
-      const upgradeResult = this.server.upgrade(c.req.raw, { data });
+      const upgradeResult = this.server?.upgrade(c.req.raw, { data });
 
       if (upgradeResult) {
         return new Response(null);
@@ -1190,9 +1186,7 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
    * Route middlewares run before the route's validator - global middlewares → route
    * middlewares → validator → handler - matching ergenecore.
    */
-  private async registerRouteDirect(
-    route: RouteParams<HonoAdapterContext, ValidationSchema, StaticServeExtras>,
-  ): Promise<void> {
+  private async registerRouteDirect(route: HonoRouteParams): Promise<void> {
     const routeLabel = `${route.method.toUpperCase()} ${route.path}`;
     const contextClass = route.contextClass;
     assertRouteContract(route, contextClass, routeLabel);
@@ -1283,15 +1277,17 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const route of this.routeQueue) {
       const controllerName = route.controllerName || 'Unknown';
       const controllerBasePath = route.controllerBasePath || '/';
+      let group = groups.get(controllerName);
 
-      if (!groups.has(controllerName)) {
-        groups.set(controllerName, {
+      if (!group) {
+        group = {
           basePath: controllerBasePath,
           routes: [],
-        });
+        };
+        groups.set(controllerName, group);
       }
 
-      groups.get(controllerName).routes.push({
+      group.routes.push({
         method: route.method.toUpperCase(),
         path: route.path,
       });
@@ -1324,15 +1320,17 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const wsRoute of this.wsRouteQueue) {
       const controllerName = wsRoute.controllerName || 'Unknown';
       const controllerBasePath = wsRoute.path; // WebSocket uses path as base path
+      let group = groups.get(controllerName);
 
-      if (!groups.has(controllerName)) {
-        groups.set(controllerName, {
+      if (!group) {
+        group = {
           basePath: controllerBasePath,
           routes: [],
-        });
+        };
+        groups.set(controllerName, group);
       }
 
-      groups.get(controllerName).routes.push({
+      group.routes.push({
         path: wsRoute.path,
       });
     }
@@ -1368,10 +1366,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     // Merge WebSocket groups into HTTP groups
     for (const [controllerName, wsGroup] of wsGroups) {
-      if (httpGroups.has(controllerName)) {
-        // Add WebSocket routes to existing controller group
-        const httpGroup = httpGroups.get(controllerName);
+      const httpGroup = httpGroups.get(controllerName);
 
+      if (httpGroup) {
+        // Add WebSocket routes to existing controller group
         for (const wsRoute of wsGroup.routes) {
           httpGroup.routes.push({
             method: 'WS',
@@ -1454,14 +1452,17 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const groups = new Map<string, { basePath: string; routes: { path: string }[] }>();
 
     for (const route of this.frontEndRouteQueue) {
-      if (!groups.has(route.controllerName)) {
-        groups.set(route.controllerName, {
+      let group = groups.get(route.controllerName);
+
+      if (!group) {
+        group = {
           basePath: route.controllerBasePath,
           routes: [],
-        });
+        };
+        groups.set(route.controllerName, group);
       }
 
-      groups.get(route.controllerName).routes.push({ path: route.path });
+      group.routes.push({ path: route.path });
     }
 
     return groups;

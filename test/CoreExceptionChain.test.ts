@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { AsenaServerFactory } from '@asenajs/asena';
-import * as decorators from '@asenajs/asena/decorators';
-import { Config, Controller, Middleware } from '@asenajs/asena/decorators';
+import * as exception from '@asenajs/asena/exception';
+import { Config, Controller, ExceptionHandler, Middleware } from '@asenajs/asena/decorators';
 import { Get } from '@asenajs/asena/decorators/http';
 import { HttpException } from '@asenajs/asena/adapter';
 import type { ServerLogger } from '@asenajs/asena/logger';
@@ -10,17 +10,6 @@ import { ConfigService } from '../lib/defaults/ConfigService';
 import { MiddlewareService } from '../lib/defaults/MiddlewareService';
 import type { Context } from '../lib/defaults/Context';
 import type { HonoAdapter } from '../lib/HonoAdapter';
-import { REQUIRE_CHAIN_ENV, chainRequired, installedCoreVersion } from './utils/coreExceptionChain';
-import { CORE_DIR_ENV } from './utils/localCore';
-
-// The devDependency is the published 0.12, which has no `@Catch`: the specifier is not a literal so
-// the file type-checks there, and the suite runs only against a core that ships the chain.
-const exceptionModule: string = '@asenajs/asena/exception';
-const exception: any = await import(exceptionModule).catch(() => undefined);
-const ExceptionHandler: (() => ClassDecorator) | undefined = (decorators as any).ExceptionHandler;
-const hasChain = exception !== undefined && ExceptionHandler !== undefined;
-const coreVersion = installedCoreVersion();
-const required = chainRequired({ coreVersion, flag: process.env[REQUIRE_CHAIN_ENV] });
 
 const DEVTOOLS_HOOK = Symbol.for('asena.devtools');
 
@@ -102,7 +91,7 @@ const defineApp = () => {
     }
   }
 
-  @(ExceptionHandler!())
+  @ExceptionHandler()
   class CatchAllHandler {
     @exception.Catch()
     public fallback(error: unknown, ctx: { scope: string; context: Context }) {
@@ -114,7 +103,7 @@ const defineApp = () => {
     }
   }
 
-  @(ExceptionHandler!())
+  @ExceptionHandler()
   class ErrorHandler {
     @exception.Catch(Error)
     public anyError(error: Error, ctx: { scope: string; context: Context }) {
@@ -126,7 +115,7 @@ const defineApp = () => {
     }
   }
 
-  @(ExceptionHandler!())
+  @ExceptionHandler()
   class DecliningNotFoundHandler {
     @exception.NotFound()
     public missing() {
@@ -157,37 +146,8 @@ const defineApp = () => {
   };
 };
 
-describe('the core this suite runs against', () => {
-  test('a 0.13 core requires the chain, an older one does not', () => {
-    expect(chainRequired({ coreVersion: '0.12.4' })).toBe(false);
-    expect(chainRequired({ coreVersion: '0.13.0' })).toBe(true);
-    expect(chainRequired({ coreVersion: '0.13.0-next.1' })).toBe(true);
-    expect(chainRequired({ coreVersion: '1.0.0' })).toBe(true);
-  });
-
-  test(`${REQUIRE_CHAIN_ENV}=1 requires the chain on any core`, () => {
-    expect(chainRequired({ coreVersion: '0.12.0', flag: '1' })).toBe(true);
-    expect(chainRequired({ coreVersion: '0.12.0', flag: '0' })).toBe(false);
-    expect(chainRequired({ coreVersion: '0.12.0', flag: '' })).toBe(false);
-  });
-
-  test('ships the exception chain when it is required', () => {
-    if (!hasChain && !required) {
-      console.warn(
-        `[CoreExceptionChain] SKIPPED: @asenajs/asena ${coreVersion} has no exception chain. ` +
-          `Run it against a built core checkout: ${CORE_DIR_ENV}=<checkout> bun run test:local-core ` +
-          `(or bun run test:core-chain once a 0.13 core is installed).`,
-      );
-
-      return;
-    }
-
-    expect({ coreVersion, hasChain }).toEqual({ coreVersion, hasChain: true });
-  });
-});
-
-describe.skipIf(!hasChain)('core exception chain over the Hono adapter', () => {
-  const app = hasChain ? defineApp() : (undefined as unknown as ReturnType<typeof defineApp>);
+describe('core exception chain over the Hono adapter', () => {
+  const app = defineApp();
 
   let server: any;
   let adapter: HonoAdapter;

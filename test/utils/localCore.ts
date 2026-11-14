@@ -1,7 +1,6 @@
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { REQUIRE_CHAIN_ENV } from './coreExceptionChain';
 
 export const CORE_DIR_ENV = 'ASENA_CORE_DIR';
 
@@ -18,8 +17,8 @@ const restorePublishedCopy = (installDir: string) => {
   }
 };
 
-const execute = async (command: string[], cwd: string, env?: Record<string, string | undefined>): Promise<number> =>
-  Bun.spawn(command, { cwd, env: env ?? process.env, stdio: ['inherit', 'inherit', 'inherit'] }).exited;
+const execute = async (command: string[], cwd: string): Promise<number> =>
+  Bun.spawn(command, { cwd, env: process.env, stdio: ['inherit', 'inherit', 'inherit'] }).exited;
 
 const pack = async (coreDir: string, scratch: string): Promise<string> => {
   const manifest = JSON.parse(readFileSync(join(coreDir, 'package.json'), 'utf8'));
@@ -96,10 +95,7 @@ if (import.meta.main) {
     installDir: join(repository, 'node_modules', CORE_NAME),
     run: async () => {
       const typecheck = await execute(['bun', 'run', 'typecheck'], repository);
-      const tests = await execute(['bun', 'test', ...process.argv.slice(2)], repository, {
-        ...process.env,
-        [REQUIRE_CHAIN_ENV]: '1',
-      });
+      const tests = await execute(['bun', 'test', ...process.argv.slice(2)], repository);
 
       return typecheck || tests;
     },

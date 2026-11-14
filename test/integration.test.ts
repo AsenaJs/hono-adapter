@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { HonoAdapter } from '../lib/HonoAdapter';
 import { HonoWebsocketAdapter } from '../lib/HonoWebsocketAdapter';
 import type { ServerLogger } from '@asenajs/asena/logger';
+import type { Context as HonoAdapterContext } from '../lib/defaults';
 import { HttpMethod } from '@asenajs/asena/web-types';
 
 // Mock logger
@@ -180,7 +181,7 @@ describe('Route Grouping Tests - registerControllerRoutes', () => {
 
     // Mock middleware that adds a value to context
     const mockMiddleware = {
-      handle: async (context, next) => {
+      handle: async (context: HonoAdapterContext, next: () => Promise<void>) => {
         context.setValue('middlewareCalled', true);
         // Must call next to continue the middleware chain
         return await next();

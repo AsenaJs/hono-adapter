@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach, spyOn } from 'bun:test';
+import { describe, expect, it, afterEach, mock, setSystemTime, spyOn } from 'bun:test';
 import type { Server } from 'bun';
 import { RateLimiterMiddleware } from '../lib/middlewares/RateLimiterMiddleware';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -845,6 +845,53 @@ describe('RateLimiterMiddleware — maxBuckets validation', () => {
     await rl.handle(context('c2'), async () => {});
 
     expect(rl.getBucketState('c1')).toBeUndefined();
+    expect(rl.getBucketState('c2')).toBeDefined();
+
+    rl.destroy();
+  });
+});
+
+describe('RateLimiterMiddleware — handle() on a stub context', () => {
+  afterEach(() => {
+    setSystemTime();
+  });
+
+  it('reads the client from getRequestIp and sets its headers with setResponseHeader', async () => {
+    setSystemTime(new Date(1_700_000_000_000));
+
+    const rl = new RateLimiterMiddleware({ capacity: 5, refillRate: 1, cleanupInterval: 0 });
+    const getRequestIp = mock(() => '203.0.113.7');
+    const setResponseHeader = mock((_name: string, _value: string) => {});
+    const next = mock(async () => {});
+    const context = { req: { header: () => undefined }, getRequestIp, setResponseHeader } as any;
+
+    await rl.handle(context, next);
+
+    expect(getRequestIp).toHaveBeenCalled();
+    expect(rl.getBucketState('203.0.113.7')?.tokens).toBe(4);
+    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '60');
+    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Remaining', '4');
+    expect(setResponseHeader).toHaveBeenCalledWith('X-RateLimit-Reset', '1700000060');
+    expect(next).toHaveBeenCalledTimes(1);
+
+    rl.destroy();
+  });
+
+  it('evicts an undefined key like any other when the bucket cap is reached', async () => {
+    const rl = new RateLimiterMiddleware({
+      maxBuckets: 2,
+      cleanupInterval: 0,
+      keyGenerator: (ctx) => ctx.req.header('x-client') as string,
+    });
+    const context = (client: string | undefined) =>
+      ({ req: { header: () => client }, setResponseHeader: () => {} }) as any;
+
+    await rl.handle(context(undefined), async () => {});
+    await rl.handle(context('c1'), async () => {});
+    await rl.handle(context('c2'), async () => {});
+
+    expect(rl.getBucketState(undefined as any)).toBeUndefined();
+    expect(rl.getBucketState('c1')).toBeDefined();
     expect(rl.getBucketState('c2')).toBeDefined();
 
     rl.destroy();

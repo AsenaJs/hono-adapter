@@ -257,6 +257,36 @@ describe('HonoContextWrapper', () => {
       const res = await fetch(`${baseUrl}/users/42`);
       expect((await res.json()).userId).toBe('42');
     });
+
+    it("getParam() returns '' for a name the route does not declare", async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/users/:id',
+        handler: (ctx) => ctx.send({ id: ctx.getParam('id'), missing: ctx.getParam('missing') }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      const res = await fetch(`${baseUrl}/users/42`);
+      expect(await res.json()).toEqual({ id: '42', missing: '' });
+    });
+
+    it("getParam() returns '' for an optional parameter the request leaves out", async () => {
+      const { adapter } = createTestAdapter();
+
+      await registerRoute(adapter, {
+        path: '/items/:id?',
+        handler: (ctx) => ctx.send({ id: ctx.getParam('id') }),
+      });
+
+      const { server: s, baseUrl } = await startTestServer(adapter);
+      server = s;
+
+      expect(await (await fetch(`${baseUrl}/items`)).json()).toEqual({ id: '' });
+      expect(await (await fetch(`${baseUrl}/items/7`)).json()).toEqual({ id: '7' });
+    });
   });
 
   // ─── Request Properties ───────────────────────────────────────────

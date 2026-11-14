@@ -31,10 +31,10 @@ function jsonPost(body: string): RequestInit {
   return { method: 'POST', body, headers: { 'Content-Type': 'application/json' } };
 }
 
-const throwingWrapper = () =>
+const throwingWrapper = (thrown: unknown = new Error('boom')) =>
   new HonoContextWrapper({
     get req(): never {
-      throw new Error('boom');
+      throw thrown;
     },
   } as unknown as Context);
 
@@ -139,6 +139,19 @@ describe('context read methods return promises', () => {
       }).not.toThrow();
       expect(returned).toBeInstanceOf(Promise);
       await expect(returned as Promise<unknown>).rejects.toThrow('boom');
+    }
+  });
+
+  it('rejects with the thrown value itself, an Error or not', async () => {
+    for (const thrown of [new Error('boom'), 'boom', { code: 7 }]) {
+      for (const read of [
+        (w: HonoContextWrapper) => w.getQuery('a'),
+        (w: HonoContextWrapper) => w.getQueryAll('a'),
+        (w: HonoContextWrapper) => w.getBody(),
+        (w: HonoContextWrapper) => w.getParseBody(),
+      ]) {
+        await expect(read(throwingWrapper(thrown))).rejects.toBe(thrown);
+      }
     }
   });
 });
