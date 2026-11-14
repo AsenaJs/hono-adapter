@@ -1775,6 +1775,58 @@ describe('HonoAdapter', () => {
       const routeLog = infoCalls.find((c: string) => c.includes('UserController') || c.includes('PostController'));
       expect(routeLog).toBeDefined();
     });
+
+    it('lists each route once under its controller, WebSocket routes and pages included', async () => {
+      const { adapter, logger } = createTestAdapter();
+      const page = () => new Response('<html></html>', { headers: { 'Content-Type': 'text/html' } });
+
+      await registerRoute(adapter, { path: '/users', controllerName: 'UserController', controllerBasePath: '/users' });
+      await registerRoute(adapter, {
+        method: HttpMethod.POST,
+        path: '/users',
+        controllerName: 'UserController',
+        controllerBasePath: '/users',
+      });
+      adapter.registerWebsocketRoute({
+        path: 'users/live',
+        middlewares: [],
+        websocketService: null,
+        controllerName: 'UserController',
+      } as any);
+      adapter.registerWebsocketRoute({
+        path: 'feed',
+        middlewares: [],
+        websocketService: null,
+        controllerName: 'FeedSocket',
+      } as any);
+      adapter.registerHTMLRoute('/ui/home', page(), 'Pages', '/ui');
+      adapter.registerHTMLRoute('/ui/about', page(), 'Pages', '/ui');
+
+      server = (await startTestServer(adapter)).server;
+
+      const infoLines = (logger.info as any).mock.calls.map((call: any[]) => Bun.stripANSI(String(call[0])));
+
+      expect(infoLines).toContain('✓ Successfully registered CONTROLLER UserController (2 routes)');
+      expect(infoLines).toContain('✓ Successfully registered WEBSOCKET FeedSocket (1 route)');
+      expect(infoLines).toContain('✓ Successfully registered FRONTEND Pages (2 routes)');
+      expect(infoLines).toContain(
+        [
+          '',
+          '  FeedSocket (feed)',
+          '    WS feed',
+          '',
+          '  UserController (/users)',
+          '    GET /users',
+          '    POST /users',
+          '    WS users/live',
+          '',
+          '  Pages (/ui)',
+          '    HTML /ui/home',
+          '    HTML /ui/about',
+          '',
+        ].join('\n'),
+      );
+    });
   });
 
   // ─── WebSocket Route Registration ─────────────────────────────────

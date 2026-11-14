@@ -1277,15 +1277,17 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const route of this.routeQueue) {
       const controllerName = route.controllerName || 'Unknown';
       const controllerBasePath = route.controllerBasePath || '/';
+      let group = groups.get(controllerName);
 
-      if (!groups.has(controllerName)) {
-        groups.set(controllerName, {
+      if (!group) {
+        group = {
           basePath: controllerBasePath,
           routes: [],
-        });
+        };
+        groups.set(controllerName, group);
       }
 
-      groups.get(controllerName)!.routes.push({
+      group.routes.push({
         method: route.method.toUpperCase(),
         path: route.path,
       });
@@ -1318,15 +1320,17 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     for (const wsRoute of this.wsRouteQueue) {
       const controllerName = wsRoute.controllerName || 'Unknown';
       const controllerBasePath = wsRoute.path; // WebSocket uses path as base path
+      let group = groups.get(controllerName);
 
-      if (!groups.has(controllerName)) {
-        groups.set(controllerName, {
+      if (!group) {
+        group = {
           basePath: controllerBasePath,
           routes: [],
-        });
+        };
+        groups.set(controllerName, group);
       }
 
-      groups.get(controllerName)!.routes.push({
+      group.routes.push({
         path: wsRoute.path,
       });
     }
@@ -1362,10 +1366,10 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
 
     // Merge WebSocket groups into HTTP groups
     for (const [controllerName, wsGroup] of wsGroups) {
-      if (httpGroups.has(controllerName)) {
-        // Add WebSocket routes to existing controller group
-        const httpGroup = httpGroups.get(controllerName)!;
+      const httpGroup = httpGroups.get(controllerName);
 
+      if (httpGroup) {
+        // Add WebSocket routes to existing controller group
         for (const wsRoute of wsGroup.routes) {
           httpGroup.routes.push({
             method: 'WS',
@@ -1448,14 +1452,17 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     const groups = new Map<string, { basePath: string; routes: { path: string }[] }>();
 
     for (const route of this.frontEndRouteQueue) {
-      if (!groups.has(route.controllerName)) {
-        groups.set(route.controllerName, {
+      let group = groups.get(route.controllerName);
+
+      if (!group) {
+        group = {
           basePath: route.controllerBasePath,
           routes: [],
-        });
+        };
+        groups.set(route.controllerName, group);
       }
 
-      groups.get(route.controllerName)!.routes.push({ path: route.path });
+      group.routes.push({ path: route.path });
     }
 
     return groups;
