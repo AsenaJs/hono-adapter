@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import type { Server } from 'bun';
+import { Hono } from 'hono';
 import type { ServerLogger } from '@asenajs/asena/logger';
 import { createDeepMock } from '@asenajs/asena/test';
 import { createHonoAdapter } from '../lib/utils/createHonoAdapter';
 import { HonoAdapter } from '../lib/HonoAdapter';
+import { HonoWebsocketAdapter } from '../lib/HonoWebsocketAdapter';
 import { createMockLogger, registerRoute } from './utils/testHelpers';
 
 class DelegatingLogger implements ServerLogger {
@@ -31,6 +33,13 @@ const getTrapLogger = (): ServerLogger => {
 
   return new Proxy({} as ServerLogger, { get: (_target, key) => Reflect.get(methods, key) });
 };
+
+const bareLoggers: [string, () => ServerLogger][] = [
+  ['a plain object', createMockLogger],
+  ['a class instance with its own logger field', () => new DelegatingLogger()],
+  ['a Proxy that answers from a get trap only', getTrapLogger],
+  ['a deep mock', () => createDeepMock()],
+];
 
 describe('createHonoAdapter', () => {
   it('should create adapter with ServerLogger argument', () => {
@@ -66,12 +75,7 @@ describe('createHonoAdapter', () => {
     expect(adapter.name).toBe('HonoAdapter');
   });
 
-  it.each<[string, () => ServerLogger]>([
-    ['a plain object', createMockLogger],
-    ['a class instance with its own logger field', () => new DelegatingLogger()],
-    ['a Proxy that answers from a get trap only', getTrapLogger],
-    ['a deep mock', () => createDeepMock()],
-  ])('uses a logger passed on its own, with the default options (%s)', (_label, createLogger) => {
+  it.each(bareLoggers)('uses a logger passed on its own, with the default options (%s)', (_label, createLogger) => {
     const logger = createLogger();
     const [adapter, returnedLogger] = createHonoAdapter(logger);
 
@@ -87,6 +91,39 @@ describe('createHonoAdapter', () => {
     const [adapter, returnedLogger] = createHonoAdapter({ logger, strict: true, logErrors: false });
 
     expect(returnedLogger).toBe(logger);
+    expect(adapter['logger']).toBe(logger);
+    expect(adapter.getWebsocketAdapter()?.logger).toBe(logger);
+    expect(adapter['_strict']).toBe(true);
+    expect(adapter['logErrors']).toBe(false);
+  });
+});
+
+describe('new HonoAdapter', () => {
+  it.each(bareLoggers)('uses a logger passed on its own, with the default options (%s)', (_label, createLogger) => {
+    const logger = createLogger();
+    const adapter = new HonoAdapter(logger);
+
+    expect(adapter['logger']).toBe(logger);
+    expect(adapter.getWebsocketAdapter()?.logger).toBe(logger);
+    expect(adapter['_strict']).toBe(false);
+    expect(adapter['logErrors']).toBe(true);
+  });
+
+  it('takes the WebSocket adapter and the app passed after the logger', () => {
+    const logger = createMockLogger();
+    const websocketAdapter = new HonoWebsocketAdapter(logger);
+    const app = new Hono();
+    const adapter = new HonoAdapter(logger, websocketAdapter, app);
+
+    expect(adapter['logger']).toBe(logger);
+    expect(adapter.getWebsocketAdapter()).toBe(websocketAdapter);
+    expect(adapter.app).toBe(app);
+  });
+
+  it('takes the logger and the options from an options object', () => {
+    const logger = createMockLogger();
+    const adapter = new HonoAdapter({ logger, strict: true, logErrors: false });
+
     expect(adapter['logger']).toBe(logger);
     expect(adapter.getWebsocketAdapter()?.logger).toBe(logger);
     expect(adapter['_strict']).toBe(true);

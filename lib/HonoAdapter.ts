@@ -38,6 +38,7 @@ import type { ZodError, ZodType } from 'zod';
 import { brandHonoHttpException, ValidationError, warnOnNestedHono } from './errors';
 import { middlewareParser } from './utils/middlewareParser';
 import { describeThrown, guardThrows, unwrapThrown } from './utils/nonErrorThrow';
+import { isServerLogger } from './utils/isServerLogger';
 import { compareRoutePriority } from './utils/routePriority';
 import type { Context as HonoAdapterContext } from './defaults/Context';
 import { HttpMethod } from '@asenajs/asena/web-types';
@@ -227,33 +228,22 @@ export class HonoAdapter extends AsenaAdapter<HonoAdapterContext, ValidationSche
     websocketAdapter?: HonoWebsocketAdapter,
     app?: Hono<any, any, any>,
   ) {
-    let logger: ServerLogger;
-    let wsAdapter: HonoWebsocketAdapter;
-    let honoApp: Hono<any, any, any> | undefined;
+    const options: HonoAdapterOptions = isServerLogger(loggerOrOptions)
+      ? { logger: loggerOrOptions, websocketAdapter, app }
+      : loggerOrOptions;
+    const logger = options.logger;
 
-    if (typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions) {
-      logger = loggerOrOptions.logger;
-      wsAdapter = loggerOrOptions.websocketAdapter ?? new HonoWebsocketAdapter(logger);
-      honoApp = loggerOrOptions.app;
-    } else {
-      logger = loggerOrOptions;
-      wsAdapter = websocketAdapter ?? new HonoWebsocketAdapter(logger);
-      honoApp = app;
-    }
-
-    super(logger, wsAdapter);
+    super(logger, options.websocketAdapter ?? new HonoWebsocketAdapter(logger));
 
     if (!this.websocketAdapter.logger && logger) {
       this.websocketAdapter.logger = this.logger;
     }
 
-    const isOptionsObject = typeof loggerOrOptions === 'object' && 'logger' in loggerOrOptions;
+    this._strict = options.strict ?? false;
+    this.logErrors = options.logErrors ?? true;
 
-    this._strict = isOptionsObject ? (loggerOrOptions.strict ?? false) : false;
-    this.logErrors = isOptionsObject ? (loggerOrOptions.logErrors ?? true) : true;
-
-    if (honoApp) {
-      this.app = honoApp;
+    if (options.app) {
+      this.app = options.app;
     } else {
       this.app = new Hono({ strict: this._strict });
     }

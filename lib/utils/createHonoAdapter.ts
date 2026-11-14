@@ -1,6 +1,7 @@
 import { HonoAdapter } from '../../index';
 import type { ServerLogger } from '@asenajs/asena/logger';
 import type { HonoAdapterOptions } from '../types/HonoAdapterOptions';
+import { isServerLogger } from './isServerLogger';
 
 const createConsoleLogger = (): ServerLogger => {
   const runningProfiles = new Set<string>();
@@ -19,9 +20,6 @@ const createConsoleLogger = (): ServerLogger => {
     },
   };
 };
-
-const isServerLogger = (value: ServerLogger | Partial<HonoAdapterOptions>): value is ServerLogger =>
-  typeof (value as Partial<ServerLogger>).info === 'function';
 
 export const createHonoAdapter = (
   loggerOrOptions: ServerLogger | Partial<HonoAdapterOptions> = {},
